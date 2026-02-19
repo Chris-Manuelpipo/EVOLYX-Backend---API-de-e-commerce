@@ -137,6 +137,15 @@ router.put('/:id', upload.array('images', 5), async (req, res, next) => {
   }
 });
 
+router.delete('/:id', async (req, res, next) => {
+  try {
+    await service.deleteProduct(req.params.id);
+    res.json({ success: true, message: "Produit supprimé" });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Route pour upload d'image seule - MODIFIÉE
 router.post('/:id/images', upload.single('image'), async (req, res, next) => {
   try {
