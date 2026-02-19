@@ -50,13 +50,13 @@ exports.createProduct = async (data, imageUrls = []) => {
   try {
     await client.query('BEGIN');
     
-    const { name, description, base_price, stock, category_id } = data;
+    const { name, description, base_price, cost_price, stock, category_id } = data;
     
     const productResult = await client.query(
-      `INSERT INTO products(name, description, base_price, stock, category_id)
-       VALUES($1,$2,$3,$4,$5)
+      `INSERT INTO products(name, description, base_price, cost_price, stock, category_id)
+       VALUES($1,$2,$3,$4,$5,$6)
        RETURNING *`,
-      [name, description, base_price, stock, category_id]
+      [name, description, base_price, cost_price || null, stock, category_id]
     );
     
     const product = productResult.rows[0];
@@ -149,7 +149,7 @@ exports.updateProduct = async (id, data, imageUrls = []) => {
   try {
     await client.query('BEGIN');
     
-    const { name, description, base_price, stock, category_id, is_featured } = data;
+    const { name, description, base_price, cost_price, stock, category_id, is_featured } = data;
     
     // Construire la requête dynamiquement
     let query = 'UPDATE products SET ';
@@ -169,6 +169,11 @@ exports.updateProduct = async (id, data, imageUrls = []) => {
     if (base_price !== undefined) {
       query += `base_price = $${paramCount}, `;
       values.push(base_price);
+      paramCount++;
+    }
+    if (cost_price !== undefined) {
+      query += `cost_price = $${paramCount}, `;
+      values.push(cost_price);
       paramCount++;
     }
     if (stock !== undefined) {
