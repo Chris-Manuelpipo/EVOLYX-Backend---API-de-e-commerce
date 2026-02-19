@@ -23,11 +23,18 @@ exports.getDashboardStats = async () => {
     SELECT COUNT(*) FROM products 
     WHERE stock <= 0 AND is_active = true
   `);
+
+  const totalStockValue = await db.query(`
+    SELECT COALESCE(SUM(base_price * stock), 0) as value 
+    FROM products 
+    WHERE is_active = true
+  `);
   
   return {
     totalProducts: parseInt(totalProducts.rows[0].count),
     todayOrders: parseInt(todayOrders.rows[0].count),
     monthlyRevenue: parseFloat(monthlyRevenue.rows[0].revenue),
-    outOfStock: parseInt(outOfStock.rows[0].count)
+    outOfStock: parseInt(outOfStock.rows[0].count),
+    totalStockValue: parseFloat(totalStockValue.rows[0].value)
   };
 };

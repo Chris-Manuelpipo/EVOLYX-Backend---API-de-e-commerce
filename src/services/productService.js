@@ -1,38 +1,78 @@
 const db = require('../config/database');
 
 // CREATE avec images
-exports.createProduct = async (data, imageFiles = []) => {
+// exports.createProduct = async (data, imageFiles = []) => {
+//   const client = await db.connect();
+  
+//   try {
+//     await client.query('BEGIN');
+    
+//     const { name, description, base_price, stock, category_id, is_featured = false } = data;
+    
+//     // Insérer le produit (avec is_featured)
+//     const productResult = await client.query(
+//       `INSERT INTO products(name, description, base_price, stock, category_id, is_featured)
+//        VALUES($1,$2,$3,$4,$5,$6)
+//        RETURNING *`,
+//       [name, description, base_price, stock, category_id, is_featured]
+//     );
+    
+//     const product = productResult.rows[0];
+    
+//     // Ajouter les images si présentes
+//     if (imageFiles && imageFiles.length > 0) {
+//       for (let i = 0; i < imageFiles.length; i++) {
+//         await client.query(
+//           `INSERT INTO product_images(product_id, image_url, is_main, sort_order)
+//            VALUES($1, $2, $3, $4)`,
+//           [product.id, imageFiles[i].filename, i === 0, i]
+//         );
+//       }
+//     }
+    
+//     await client.query('COMMIT');
+    
+//     // Récupérer le produit avec ses images
+//     return await exports.getOneProduct(product.id);
+    
+//   } catch (error) {
+//     await client.query('ROLLBACK');
+//     throw error;
+//   } finally {
+//     client.release();
+//   }
+// };
+
+// CREATE avec images (version Cloudinary)
+exports.createProduct = async (data, imageUrls = []) => {
   const client = await db.connect();
   
   try {
     await client.query('BEGIN');
     
-    const { name, description, base_price, stock, category_id, is_featured = false } = data;
+    const { name, description, base_price, stock, category_id } = data;
     
-    // Insérer le produit (avec is_featured)
     const productResult = await client.query(
-      `INSERT INTO products(name, description, base_price, stock, category_id, is_featured)
-       VALUES($1,$2,$3,$4,$5,$6)
+      `INSERT INTO products(name, description, base_price, stock, category_id)
+       VALUES($1,$2,$3,$4,$5)
        RETURNING *`,
-      [name, description, base_price, stock, category_id, is_featured]
+      [name, description, base_price, stock, category_id]
     );
     
     const product = productResult.rows[0];
     
-    // Ajouter les images si présentes
-    if (imageFiles && imageFiles.length > 0) {
-      for (let i = 0; i < imageFiles.length; i++) {
+    // Ajouter les images avec leurs URLs Cloudinary
+    if (imageUrls && imageUrls.length > 0) {
+      for (let i = 0; i < imageUrls.length; i++) {
         await client.query(
-          `INSERT INTO product_images(product_id, image_url, is_main, sort_order)
-           VALUES($1, $2, $3, $4)`,
-          [product.id, imageFiles[i].filename, i === 0, i]
+          `INSERT INTO product_images(product_id, image_url, public_id, is_main, sort_order)
+           VALUES($1, $2, $3, $4, $5)`,
+          [product.id, imageUrls[i].url, imageUrls[i].public_id, i === 0, i]
         );
       }
     }
     
     await client.query('COMMIT');
-    
-    // Récupérer le produit avec ses images
     return await exports.getOneProduct(product.id);
     
   } catch (error) {
@@ -41,6 +81,15 @@ exports.createProduct = async (data, imageFiles = []) => {
   } finally {
     client.release();
   }
+};
+
+// Ajouter cette méthode
+exports.getImageById = async (imageId) => {
+  const result = await db.query(
+    `SELECT * FROM product_images WHERE id = $1`,
+    [imageId]
+  );
+  return result.rows[0];
 };
 
 // READ (avec images)
@@ -93,7 +142,8 @@ exports.getOneProduct = async (id) => {
 };
 
 // UPDATE avec images
-exports.updateProduct = async (id, data, imageFiles = []) => {
+// REMPLACEZ la fonction updateProduct par :
+exports.updateProduct = async (id, data, imageUrls = []) => {
   const client = await db.connect();
   
   try {
@@ -144,8 +194,8 @@ exports.updateProduct = async (id, data, imageFiles = []) => {
     
     const productResult = await client.query(query, values);
     
-    // Ajouter les nouvelles images si présentes
-    if (imageFiles && imageFiles.length > 0) {
+    // ✅ Ajouter les nouvelles images (Cloudinary)
+    if (imageUrls && imageUrls.length > 0) {
       const existingImages = await client.query(
         `SELECT COUNT(*) FROM product_images WHERE product_id = $1`,
         [id]
@@ -153,11 +203,11 @@ exports.updateProduct = async (id, data, imageFiles = []) => {
       
       const startOrder = parseInt(existingImages.rows[0].count);
       
-      for (let i = 0; i < imageFiles.length; i++) {
+      for (let i = 0; i < imageUrls.length; i++) {
         await client.query(
-          `INSERT INTO product_images(product_id, image_url, is_main, sort_order)
-           VALUES($1, $2, $3, $4)`,
-          [id, imageFiles[i].filename, false, startOrder + i]
+          `INSERT INTO product_images(product_id, image_url, public_id, is_main, sort_order)
+           VALUES($1, $2, $3, $4, $5)`,
+          [id, imageUrls[i].url, imageUrls[i].public_id, false, startOrder + i]
         );
       }
     }
@@ -174,19 +224,31 @@ exports.updateProduct = async (id, data, imageFiles = []) => {
   }
 };
 
-// DELETE avec gestion des contraintes
+// DELETE avec gestion des contraintes 
 exports.deleteProduct = async (id) => {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
     
-    // Supprimer les images
-    await client.query(`DELETE FROM product_images WHERE product_id = $1`, [id]);
-    // Supprimer les références dans order_items
+    // ✅ Récupérer toutes les images du produit
+    const images = await client.query(
+      `SELECT * FROM product_images WHERE product_id = $1`,
+      [id]
+    );
+    
+    // ✅ Supprimer chaque image de Cloudinary
+    const cloudinary = require('../config/cloudinary');
+    for (const image of images.rows) {
+      if (image.public_id) {
+        await cloudinary.uploader.destroy(image.public_id);
+        console.log('✅ Image supprimée de Cloudinary:', image.public_id);
+      }
+    }
+    
+    // Supprimer les références
     await client.query(`DELETE FROM order_items WHERE product_id = $1`, [id]);
-    // Supprimer les références dans cart_items
     await client.query(`DELETE FROM cart_items WHERE product_id = $1`, [id]);
-    // Enfin supprimer le produit
+    await client.query(`DELETE FROM product_images WHERE product_id = $1`, [id]);
     await client.query(`DELETE FROM products WHERE id = $1`, [id]);
     
     await client.query('COMMIT');
@@ -238,7 +300,7 @@ exports.addProductImage = async (productId, file, isMain = false) => {
   
   try {
     await client.query('BEGIN');
-    
+    console.log('📦 addProductImage:', { productId, file, isMain });
     if (isMain) {
       await client.query(
         `UPDATE product_images SET is_main = false WHERE product_id = $1`,
@@ -255,9 +317,9 @@ exports.addProductImage = async (productId, file, isMain = false) => {
     const nextOrder = orderResult.rows[0].next_order;
     
     const result = await client.query(
-      `INSERT INTO product_images(product_id, image_url, is_main, sort_order)
-       VALUES($1, $2, $3, $4) RETURNING *`,
-      [productId, file.filename, isMain, nextOrder]
+      `INSERT INTO product_images(product_id, image_url, public_id, is_main, sort_order)
+       VALUES($1, $2, $3, $4, $5) RETURNING *`,
+      [productId, file.url, file.public_id, isMain, nextOrder]
     );
     
     await client.query('COMMIT');
@@ -273,8 +335,42 @@ exports.addProductImage = async (productId, file, isMain = false) => {
 };
 
 // Supprimer une image
+// REMPLACEZ par :
 exports.deleteProductImage = async (imageId) => {
-  await db.query(`DELETE FROM product_images WHERE id = $1`, [imageId]);
+  const client = await db.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // Récupérer l'image pour avoir le public_id
+    const image = await client.query(
+      `SELECT * FROM product_images WHERE id = $1`,
+      [imageId]
+    );
+    
+    if (image.rows.length === 0) {
+      throw new Error('Image non trouvée');
+    }
+    
+    // ✅ Supprimer de Cloudinary si public_id existe
+    if (image.rows[0].public_id) {
+      const cloudinary = require('../config/cloudinary');
+      await cloudinary.uploader.destroy(image.rows[0].public_id);
+      console.log('✅ Image supprimée de Cloudinary:', image.rows[0].public_id);
+    }
+    
+    // Supprimer de la base
+    await client.query(`DELETE FROM product_images WHERE id = $1`, [imageId]);
+    
+    await client.query('COMMIT');
+    return { success: true };
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 // Produits par catégorie
