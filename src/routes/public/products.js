@@ -27,9 +27,9 @@ router.get('/search', async (req, res, next) => {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 12;
         
-        if (!q || q.length < 2) {
-            return res.json({ success: true, data: [], message: "Requête trop courte" });
-        }
+        // if (!q || q.length < 2) {
+        //     return res.json({ success: true, data: [], message: "Requête trop courte" });
+        // }
         
         const products = await service.searchProducts(q, page, limit);
         res.json({ success: true, data: products });

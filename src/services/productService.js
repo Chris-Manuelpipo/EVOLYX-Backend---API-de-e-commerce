@@ -391,5 +391,79 @@ exports.countSearchResults = async (query) => {
     return parseInt(result.rows[0].total);
 };
 
+// ============================================
+// GET ADMIN PRODUCTS WITH FILTERS
+// ============================================
+exports.getAdminProducts = async (filters = {}, page = 1, limit = 20) => {
+  const offset = (page - 1) * limit;
+  const values = [];
+  let whereClause = 'WHERE 1=1';
+  let paramCount = 1;
+  
+  // ✅ Filtre par catégorie
+  if (filters.category_id) {
+    whereClause += ` AND p.category_id = $${paramCount}`;
+    values.push(filters.category_id);
+    paramCount++;
+  }
+  
+  // ✅ Filtre par stock minimum
+  if (filters.stock_min !== undefined) {
+    whereClause += ` AND p.stock >= $${paramCount}`;
+    values.push(filters.stock_min);
+    paramCount++;
+  }
+  
+  // ✅ Filtre par stock maximum
+  if (filters.stock_max !== undefined) {
+    whereClause += ` AND p.stock <= $${paramCount}`;
+    values.push(filters.stock_max);
+    paramCount++;
+  }
+  
+  // ✅ Compter le total (pour la pagination)
+  const countQuery = `
+    SELECT COUNT(*) as total 
+    FROM products p
+    ${whereClause}
+  `;
+  
+  const countResult = await db.query(countQuery, values);
+  const total = parseInt(countResult.rows[0].total);
+  
+  // ✅ Récupérer les produits avec pagination
+  const query = `
+    SELECT p.*, 
+           COALESCE(
+             json_agg(
+               json_build_object(
+                 'id', pi.id,
+                 'url', pi.image_url,
+                 'is_main', pi.is_main
+               ) ORDER BY pi.sort_order
+             ) FILTER (WHERE pi.id IS NOT NULL), '[]'
+           ) as images
+    FROM products p
+    LEFT JOIN product_images pi ON p.id = pi.product_id
+    ${whereClause}
+    GROUP BY p.id
+    ORDER BY p.id DESC
+    LIMIT $${paramCount} OFFSET $${paramCount + 1}
+  `;
+  
+  values.push(limit, offset);
+  
+  const result = await db.query(query, values);
+  
+  return {
+    products: result.rows,
+    total: total,
+    page: page,
+    limit: limit,
+    totalPages: Math.ceil(total / limit)
+  };
+};
+
+
 // Alias
 exports.getCategoryProducts = exports.getProductsByCategory;

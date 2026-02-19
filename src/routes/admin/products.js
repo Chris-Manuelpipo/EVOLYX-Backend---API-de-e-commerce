@@ -82,14 +82,41 @@ router.delete('/images/:imageId', async (req, res, next) => {
   }
 });
 
-// AJOUTER ceci pour lister les produits en admin
+// route pour lister les produits en admin
+
+
 router.get('/', async (req, res, next) => {
   try {
-    const products = await service.getProductsPaginated(
-      req.query.page || 1,
-      req.query.limit || 20
-    );
-    res.json({ success: true, data: products });
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    
+    // ✅ Extraire les filtres
+    const filters = {};
+    
+    if (req.query.category_id) {
+      filters.category_id = parseInt(req.query.category_id);
+    }
+    
+    if (req.query.stock_min !== undefined) {
+      filters.stock_min = parseInt(req.query.stock_min);
+    }
+    
+    if (req.query.stock_max !== undefined) {
+      filters.stock_max = parseInt(req.query.stock_max);
+    }
+    
+    const result = await service.getAdminProducts(filters, page, limit);
+    
+    res.json({ 
+      success: true, 
+      data: {
+        products: result.products,
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+        totalPages: result.totalPages
+      }
+    });
   } catch (err) {
     next(err);
   }
