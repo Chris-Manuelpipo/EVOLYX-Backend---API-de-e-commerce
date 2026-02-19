@@ -4,7 +4,7 @@ const validate = require('../../middleware/validate');
 const { createCategorySchema, updateCategorySchema } = require('../../validators/categoryValidator');
 const auth  = require('../../middleware/auth');
 
-router.use(auth);
+router.use(auth); 
 
 router.post('/', validate(createCategorySchema), controller.createCategory);
 router.put('/:id', validate(updateCategorySchema), controller.updateCategory); 
