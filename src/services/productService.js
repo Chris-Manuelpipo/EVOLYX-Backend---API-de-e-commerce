@@ -1,4 +1,5 @@
-const db = require('../config/database');
+const db = require('../config/database');  
+const {cloudinary} = require('../config/cloudinary');
 
 // CREATE avec images
 // exports.createProduct = async (data, imageFiles = []) => {
@@ -242,7 +243,6 @@ exports.deleteProduct = async (id) => {
     );
     
     // ✅ Supprimer chaque image de Cloudinary
-    const cloudinary = require('../config/cloudinary');
     for (const image of images.rows) {
       if (image.public_id) {
         await cloudinary.uploader.destroy(image.public_id);
@@ -359,7 +359,6 @@ exports.deleteProductImage = async (imageId) => {
     
     // ✅ Supprimer de Cloudinary si public_id existe
     if (image.rows[0].public_id) {
-      const cloudinary = require('../config/cloudinary');
       await cloudinary.uploader.destroy(image.rows[0].public_id);
       console.log('✅ Image supprimée de Cloudinary:', image.rows[0].public_id);
     }

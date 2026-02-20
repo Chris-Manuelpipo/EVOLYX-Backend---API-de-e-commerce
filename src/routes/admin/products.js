@@ -84,7 +84,7 @@
 
 const router = require('express').Router();
 const multer = require('multer');
-const { storage } = require('../../config/cloudinary');
+const {cloudinary, storage } = require('../../config/cloudinary');
 const service = require('../../services/productService');
 
 console.log('✅ Storage config:', storage ? 'OK' : 'NULL');
