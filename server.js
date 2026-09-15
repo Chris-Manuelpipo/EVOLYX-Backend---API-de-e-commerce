@@ -1,13 +1,9 @@
-// server.js - juste pour démarrer
 const dotenv = require('dotenv');
-const listEndpoints = require('express-list-endpoints');
-dotenv.config();
+dotenv.config({ quiet: true });
 
-const app = require('./src/app'); // ← Importer l'app configurée
+const app = require('./src/app');
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
-  console.log(listEndpoints(app));
+  console.log(`Serveur démarré sur le port ${PORT}`);
 });
-
