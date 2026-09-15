@@ -1,25 +1,11 @@
-// const { Pool } = require('pg');
-// require('dotenv').config();
-
-// const pool = new Pool({
-//   host: process.env.DB_HOST,
-//   port: process.env.DB_PORT,
-//   user: process.env.DB_USER,
-//   password: process.env.DB_PASSWORD,
-//   database: process.env.DB_NAME,
-// });
-
-// module.exports = pool;
-
-
+require('dotenv').config({ quiet: true });
 const { Pool } = require('pg');
-require('dotenv').config();
+const { resolveConfig, shouldUseSsl, toPgOptions } = require('./databaseConfig');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // nécessaire pour Render
-  }
-});
+const cfg = resolveConfig();
+const ssl = shouldUseSsl(cfg.host);
+const pool = new Pool(toPgOptions(cfg));
+
+console.log(`Postgres: host=${cfg.host} db=${cfg.database} ssl=${Boolean(ssl)}`);
 
 module.exports = pool;
