@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Secrets & env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Uploads & runtime
+uploads/
+tmp/
+*.log
+logs/
+
+# Tests & coverage
+coverage/
+.nyc_output/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
