@@ -1,9 +1,11 @@
 #!/bin/bash
 
-# Configuration
-API_URL="http://localhost:5000/api"
-EMAIL="evolyxcmr@gmail.com"
-PASSWORD="mbalach"
+# Configuration — renseigner les identifiants via l'environnement, jamais en dur :
+#   export ADMIN_EMAIL="..."
+#   export ADMIN_PASSWORD="..."
+API_URL="${API_URL:-http://localhost:5000/api}"
+EMAIL="${ADMIN_EMAIL:?Définir ADMIN_EMAIL}"
+PASSWORD="${ADMIN_PASSWORD:?Définir ADMIN_PASSWORD}"
 
 # Couleurs pour l'affichage
 RED='\033[0;31m'

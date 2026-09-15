@@ -1,11 +1,11 @@
 // list-endpoints.js
 const app = require('./src/app');
-const listEndpoints = require('express-list-endpoints');
+const listedEndpoints = require('./src/utils/listEndpoints');
 
 console.log('\n📋 TOUS LES ENDPOINTS DE L\'API:\n');
 console.log('═══════════════════════════════════════════════════\n');
 
-const endpoints = listEndpoints(app);
+const endpoints = listedEndpoints(app);
 
 // Regrouper par chemin
 const grouped = {};

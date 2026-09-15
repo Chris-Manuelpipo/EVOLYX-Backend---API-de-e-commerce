@@ -1,9 +1,11 @@
 #!/bin/bash
 
-# Configuration
-API_URL="https://evolyx-api.onrender.com/api"
-EMAIL="evolyxcmr@gmail.com"
-PASSWORD="mbalach"
+# Identifiants admin via l'environnement, jamais en dur :
+#   export ADMIN_EMAIL="..."
+#   export ADMIN_PASSWORD="..."
+API_URL="${API_URL:-https://evolyx-api.onrender.com/api}"
+EMAIL="${ADMIN_EMAIL:?Définir ADMIN_EMAIL}"
+PASSWORD="${ADMIN_PASSWORD:?Définir ADMIN_PASSWORD}"
 
 # Couleurs pour l'affichage
 RED='\033[0;31m'

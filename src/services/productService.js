@@ -1,5 +1,36 @@
-const db = require('../config/database');  
-const {cloudinary} = require('../config/cloudinary');
+const db = require('../config/database');
+const { cloudinary } = require('../config/cloudinary');
+const { hasColumn, hasTable } = require('../utils/schema');
+const { toBool } = require('../utils/parseBool');
+const HttpError = require('../utils/httpError');
+
+const IMAGES_AGG = `
+  COALESCE(
+    json_agg(
+      json_build_object(
+        'id', pi.id,
+        'url', pi.image_url,
+        'is_main', pi.is_main
+      ) ORDER BY pi.sort_order
+    ) FILTER (WHERE pi.id IS NOT NULL), '[]'
+  ) as images
+`;
+
+async function activeClause(alias = 'p') {
+  if (await hasColumn('products', 'is_active')) {
+    return ` AND ${alias}.is_active = true`;
+  }
+  return '';
+}
+
+function paginationMeta(total, page, limit) {
+  return {
+    total,
+    page,
+    limit,
+    totalPages: Math.max(1, Math.ceil(total / limit) || 1),
+  };
+}
 
 // CREATE avec images
 // exports.createProduct = async (data, imageFiles = []) => {
@@ -52,12 +83,31 @@ exports.createProduct = async (data, imageUrls = []) => {
     await client.query('BEGIN');
     
     const { name, description, base_price, cost_price, stock, category_id } = data;
-    
+    const is_featured = toBool(data.is_featured);
+    const is_active = toBool(data.is_active);
+
+    const fields = ['name', 'description', 'base_price', 'stock', 'category_id'];
+    const values = [name, description, base_price, stock, category_id];
+
+    if (await hasColumn('products', 'cost_price')) {
+      fields.push('cost_price');
+      values.push(cost_price ?? null);
+    }
+    if (is_featured !== undefined && await hasColumn('products', 'is_featured')) {
+      fields.push('is_featured');
+      values.push(is_featured);
+    }
+    if (is_active !== undefined && await hasColumn('products', 'is_active')) {
+      fields.push('is_active');
+      values.push(is_active);
+    }
+
+    const placeholders = fields.map((_, i) => `$${i + 1}`).join(',');
     const productResult = await client.query(
-      `INSERT INTO products(name, description, base_price, cost_price, stock, category_id)
-       VALUES($1,$2,$3,$4,$5,$6)
+      `INSERT INTO products(${fields.join(',')})
+       VALUES(${placeholders})
        RETURNING *`,
-      [name, description, base_price, cost_price || null, stock, category_id]
+      values
     );
     
     const product = productResult.rows[0];
@@ -118,27 +168,18 @@ exports.getProducts = async () => {
 };
 
 // READ un seul produit (avec images)
-exports.getOneProduct = async (id) => {
-  // ✅ CORRIGÉ: db au lieu de client
+exports.getOneProduct = async (id, options = {}) => {
+  const publicFilter = options.publicOnly ? await activeClause('p') : '';
   const result = await db.query(
-    `SELECT p.*, c.name AS category,
-            COALESCE(
-              json_agg(
-                json_build_object(
-                  'id', pi.id,
-                  'url', pi.image_url,
-                  'is_main', pi.is_main
-                ) ORDER BY pi.sort_order
-              ) FILTER (WHERE pi.id IS NOT NULL), '[]'
-            ) as images
+    `SELECT p.*, c.name AS category, ${IMAGES_AGG}
      FROM products p
      LEFT JOIN categories c ON p.category_id = c.id
      LEFT JOIN product_images pi ON p.id = pi.product_id
-     WHERE p.id = $1
+     WHERE p.id = $1 ${publicFilter}
      GROUP BY p.id, c.name`,
     [id]
   );
-  
+
   return result.rows[0];
 };
 
@@ -150,9 +191,10 @@ exports.updateProduct = async (id, data, imageUrls = []) => {
   try {
     await client.query('BEGIN');
     
-    const { name, description, base_price, cost_price, stock, category_id, is_featured } = data;
-    
-    // Construire la requête dynamiquement
+    const { name, description, base_price, cost_price, stock, category_id } = data;
+    const is_featured = toBool(data.is_featured);
+    const is_active = toBool(data.is_active);
+
     let query = 'UPDATE products SET ';
     const values = [];
     let paramCount = 1;
@@ -172,7 +214,7 @@ exports.updateProduct = async (id, data, imageUrls = []) => {
       values.push(base_price);
       paramCount++;
     }
-    if (cost_price !== undefined) {
+    if (cost_price !== undefined && await hasColumn('products', 'cost_price')) {
       query += `cost_price = $${paramCount}, `;
       values.push(cost_price);
       paramCount++;
@@ -187,18 +229,23 @@ exports.updateProduct = async (id, data, imageUrls = []) => {
       values.push(category_id);
       paramCount++;
     }
-    if (is_featured !== undefined) {
+    if (is_featured !== undefined && await hasColumn('products', 'is_featured')) {
       query += `is_featured = $${paramCount}, `;
       values.push(is_featured);
       paramCount++;
     }
+    if (is_active !== undefined && await hasColumn('products', 'is_active')) {
+      query += `is_active = $${paramCount}, `;
+      values.push(is_active);
+      paramCount++;
+    }
     
-    // Enlever la dernière virgule
-    query = query.slice(0, -2);
-    query += ` WHERE id = $${paramCount} RETURNING *`;
-    values.push(id);
-    
-    const productResult = await client.query(query, values);
+    if (values.length > 0) {
+      query = query.slice(0, -2);
+      query += ` WHERE id = $${paramCount} RETURNING *`;
+      values.push(id);
+      await client.query(query, values);
+    }
     
     // ✅ Ajouter les nouvelles images (Cloudinary)
     if (imageUrls && imageUrls.length > 0) {
@@ -246,13 +293,18 @@ exports.deleteProduct = async (id) => {
     for (const image of images.rows) {
       if (image.public_id) {
         await cloudinary.uploader.destroy(image.public_id);
-        console.log('✅ Image supprimée de Cloudinary:', image.public_id);
       }
     }
     
     // Supprimer les références
     await client.query(`DELETE FROM order_items WHERE product_id = $1`, [id]);
     await client.query(`DELETE FROM cart_items WHERE product_id = $1`, [id]);
+    if (await hasTable('wishlist_items')) {
+      await client.query(`DELETE FROM wishlist_items WHERE product_id = $1`, [id]);
+    }
+    if (await hasTable('reviews')) {
+      await client.query(`DELETE FROM reviews WHERE product_id = $1`, [id]);
+    }
     await client.query(`DELETE FROM product_images WHERE product_id = $1`, [id]);
     await client.query(`DELETE FROM products WHERE id = $1`, [id]);
     
@@ -265,38 +317,122 @@ exports.deleteProduct = async (id) => {
   }
 };
 
-// Pagination avec images
-exports.getProductsPaginated = async (page = 1, limit = 10) => {
+const SORTS = {
+  price_asc: 'p.base_price ASC, p.id DESC',
+  price_desc: 'p.base_price DESC, p.id DESC',
+  newest: 'p.created_at DESC NULLS LAST, p.id DESC',
+  featured: 'p.is_featured DESC NULLS LAST, p.id DESC',
+  pertinence: 'p.is_featured DESC NULLS LAST, p.id DESC',
+};
+
+exports.listPublicProducts = async (filters = {}) => {
+  const page = Math.max(1, parseInt(filters.page, 10) || 1);
+  const limit = Math.min(50, Math.max(1, parseInt(filters.limit, 10) || 10));
   const offset = (page - 1) * limit;
-  // 1. Compte le total de produits
-  const countResult = await db.query('SELECT COUNT(*) as total FROM products');
-  const total = parseInt(countResult.rows[0].total);
+  const values = [];
+  const where = [];
+
+  if (filters.publicOnly !== false) {
+    const publicFilter = await activeClause('p');
+    if (publicFilter) where.push('p.is_active = true');
+  }
+
+  if (filters.q) {
+    values.push(`%${String(filters.q).trim()}%`);
+    where.push(`(p.name ILIKE $${values.length} OR COALESCE(p.description, '') ILIKE $${values.length})`);
+  }
+  if (filters.category_id) {
+    values.push(Number(filters.category_id));
+    where.push(`p.category_id = $${values.length}`);
+  }
+  if (filters.min_price !== undefined && filters.min_price !== '' && filters.min_price !== null) {
+    values.push(Number(filters.min_price));
+    where.push(`p.base_price >= $${values.length}`);
+  }
+  if (filters.max_price !== undefined && filters.max_price !== '' && filters.max_price !== null) {
+    values.push(Number(filters.max_price));
+    where.push(`p.base_price <= $${values.length}`);
+  }
+  if (toBool(filters.in_stock) === true) {
+    where.push(`(
+      p.stock > 0
+      OR EXISTS (SELECT 1 FROM variations v WHERE v.product_id = p.id AND v.stock > 0)
+    )`);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const orderSql = SORTS[filters.sort] || SORTS.pertinence;
+
+  const countResult = await db.query(
+    `SELECT COUNT(*) AS total FROM products p ${whereSql}`,
+    values
+  );
+  const total = parseInt(countResult.rows[0].total, 10);
+
   const result = await db.query(
-    `SELECT p.*, 
-            COALESCE(
-              json_agg(
-                json_build_object(
-                  'id', pi.id,
-                  'url', pi.image_url,
-                  'is_main', pi.is_main
-                ) ORDER BY pi.sort_order
-              ) FILTER (WHERE pi.id IS NOT NULL), '[]'
-            ) as images
+    `SELECT p.*, c.name AS category, ${IMAGES_AGG}
      FROM products p
+     LEFT JOIN categories c ON p.category_id = c.id
      LEFT JOIN product_images pi ON p.id = pi.product_id
-     GROUP BY p.id
-     ORDER BY p.id DESC
-     LIMIT $1 OFFSET $2`,
-    [limit, offset]
+     ${whereSql}
+     GROUP BY p.id, c.name
+     ORDER BY ${orderSql}
+     LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+    [...values, limit, offset]
   );
 
   return {
     products: result.rows,
-    total: total,
-    page: page,
-    limit: limit,
-    totalPages: Math.ceil(total / limit)
+    ...paginationMeta(total, page, limit),
   };
+};
+
+exports.getRelatedProducts = async (id, limit = 4) => {
+  const product = await exports.getOneProduct(id, { publicOnly: true });
+  if (!product) {
+    throw new HttpError('Produit non trouvé', 404);
+  }
+  const publicFilter = await activeClause('p');
+  const result = await db.query(
+    `SELECT p.*, c.name AS category, ${IMAGES_AGG}
+     FROM products p
+     LEFT JOIN categories c ON p.category_id = c.id
+     LEFT JOIN product_images pi ON p.id = pi.product_id
+     WHERE p.id <> $1 ${publicFilter}
+       AND ($2::int IS NULL OR p.category_id = $2)
+     GROUP BY p.id, c.name
+     ORDER BY p.is_featured DESC NULLS LAST, p.id DESC
+     LIMIT $3`,
+    [id, product.category_id || null, limit]
+  );
+
+  if (result.rows.length >= limit) {
+    return result.rows;
+  }
+
+  const excludeIds = [Number(id), ...result.rows.map((row) => Number(row.id))];
+  const extra = await db.query(
+    `SELECT p.*, c.name AS category, ${IMAGES_AGG}
+     FROM products p
+     LEFT JOIN categories c ON p.category_id = c.id
+     LEFT JOIN product_images pi ON p.id = pi.product_id
+     WHERE NOT (p.id = ANY($1::int[])) ${publicFilter}
+     GROUP BY p.id, c.name
+     ORDER BY p.is_featured DESC NULLS LAST, p.id DESC
+     LIMIT $2`,
+    [excludeIds, limit - result.rows.length]
+  );
+
+  return result.rows.concat(extra.rows);
+};
+
+// Pagination avec images
+exports.getProductsPaginated = async (page = 1, limit = 10, options = {}) => {
+  return exports.listPublicProducts({
+    page,
+    limit,
+    publicOnly: options.publicOnly !== false,
+  });
 };
 
 // Ajouter une image à un produit existant
@@ -305,7 +441,6 @@ exports.addProductImage = async (productId, file, isMain = false) => {
   
   try {
     await client.query('BEGIN');
-    console.log('📦 addProductImage:', { productId, file, isMain });
     if (isMain) {
       await client.query(
         `UPDATE product_images SET is_main = false WHERE product_id = $1`,
@@ -354,13 +489,12 @@ exports.deleteProductImage = async (imageId) => {
     );
     
     if (image.rows.length === 0) {
-      throw new Error('Image non trouvée');
+      throw new HttpError('Image non trouvée', 404);
     }
     
     // ✅ Supprimer de Cloudinary si public_id existe
     if (image.rows[0].public_id) {
       await cloudinary.uploader.destroy(image.rows[0].public_id);
-      console.log('✅ Image supprimée de Cloudinary:', image.rows[0].public_id);
     }
     
     // Supprimer de la base
@@ -378,30 +512,32 @@ exports.deleteProductImage = async (imageId) => {
 };
 
 // Produits par catégorie
-exports.getProductsByCategory = async (categoryId, page = 1, limit = 10) => {
+exports.getProductsByCategory = async (categoryId, page = 1, limit = 10, options = {}) => {
   const offset = (page - 1) * limit;
-  
+  const publicFilter = options.publicOnly ? await activeClause('p') : '';
+
+  const countResult = await db.query(
+    `SELECT COUNT(*) as total FROM products p
+     WHERE p.category_id = $1 ${publicFilter}`,
+    [categoryId]
+  );
+  const total = parseInt(countResult.rows[0].total, 10);
+
   const result = await db.query(
-    `SELECT p.*, 
-            COALESCE(
-              json_agg(
-                json_build_object(
-                  'id', pi.id,
-                  'url', pi.image_url,
-                  'is_main', pi.is_main
-                ) ORDER BY pi.sort_order
-              ) FILTER (WHERE pi.id IS NOT NULL), '[]'
-            ) as images
+    `SELECT p.*, ${IMAGES_AGG}
      FROM products p
      LEFT JOIN product_images pi ON p.id = pi.product_id
-     WHERE p.category_id = $1
+     WHERE p.category_id = $1 ${publicFilter}
      GROUP BY p.id
      ORDER BY p.id DESC
      LIMIT $2 OFFSET $3`,
     [categoryId, limit, offset]
   );
 
-  return result.rows;
+  return {
+    products: result.rows,
+    ...paginationMeta(total, page, limit),
+  };
 };
 
 // Images d'un produit
@@ -419,22 +555,18 @@ exports.getProductImages = async (productId) => {
 
 // Produits vedettes
 exports.getFeaturedProducts = async (limit = 5) => {
+  if (!(await hasColumn('products', 'is_featured'))) {
+    return [];
+  }
+  const publicFilter = await activeClause('p');
+
   const result = await db.query(
-    `SELECT p.*, 
-            COALESCE(
-              json_agg(
-                json_build_object(
-                  'id', pi.id,
-                  'url', pi.image_url,
-                  'is_main', pi.is_main
-                ) ORDER BY pi.sort_order
-              ) FILTER (WHERE pi.id IS NOT NULL), '[]'
-            ) as images
+    `SELECT p.*, ${IMAGES_AGG}
      FROM products p
      LEFT JOIN product_images pi ON p.id = pi.product_id
-     WHERE p.is_featured = true
+     WHERE p.is_featured = true ${publicFilter}
      GROUP BY p.id
-     ORDER BY p.created_at DESC
+     ORDER BY p.id DESC
      LIMIT $1`,
     [limit]
   );
@@ -442,53 +574,30 @@ exports.getFeaturedProducts = async (limit = 5) => {
   return result.rows;
 };
 
-exports.searchProducts = async (query, page = 1, limit = 12) => {
-    const offset = (page - 1) * limit;
-    const searchPattern = `%${query}%`;
-    
-    const result = await db.query(
-        `SELECT p.*, 
-                COALESCE(
-                    json_agg(
-                        json_build_object(
-                            'id', pi.id,
-                            'url', pi.image_url,
-                            'is_main', pi.is_main
-                        ) ORDER BY pi.sort_order
-                    ) FILTER (WHERE pi.id IS NOT NULL), '[]'
-                ) as images
-         FROM products p
-         LEFT JOIN product_images pi ON p.id = pi.product_id
-         WHERE p.name ILIKE $1 
-            OR p.description ILIKE $1
-            OR CAST(p.base_price AS TEXT) ILIKE $1
-         GROUP BY p.id
-         ORDER BY 
-            CASE 
-                WHEN p.name ILIKE $2 THEN 1
-                WHEN p.description ILIKE $2 THEN 2
-                ELSE 3
-            END,
-            p.created_at DESC
-         LIMIT $3 OFFSET $4`,
-        [searchPattern, query, limit, offset]
-    );
-    
-    return result.rows;
+exports.searchProducts = async (query, page = 1, limit = 12, options = {}) => {
+  return exports.listPublicProducts({
+    q: query,
+    page,
+    limit,
+    publicOnly: options.publicOnly !== false,
+  });
 };
 
-// Optionnel: Compter le nombre total de résultats
-exports.countSearchResults = async (query) => {
-    const searchPattern = `%${query}%`;
-    
-    const result = await db.query(
-        `SELECT COUNT(*) as total
-         FROM products
-         WHERE name ILIKE $1 OR description ILIKE $1`,
-        [searchPattern]
-    );
-    
-    return parseInt(result.rows[0].total);
+exports.countSearchResults = async (query, options = {}) => {
+  const searchPattern = `%${query || ''}%`;
+  const publicFilter = options.publicOnly ? await activeClause('p') : '';
+
+  const result = await db.query(
+    `SELECT COUNT(*) as total
+     FROM products p
+     WHERE (p.name ILIKE $1
+        OR p.description ILIKE $1
+        OR CAST(p.base_price AS TEXT) ILIKE $1)
+        ${publicFilter}`,
+    [searchPattern]
+  );
+
+  return parseInt(result.rows[0].total, 10);
 };
 
 // ============================================

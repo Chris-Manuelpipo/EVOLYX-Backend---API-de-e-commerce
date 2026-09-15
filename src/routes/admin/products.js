@@ -87,23 +87,17 @@ const multer = require('multer');
 const {cloudinary, storage } = require('../../config/cloudinary');
 const service = require('../../services/productService');
 
-console.log('✅ Storage config:', storage ? 'OK' : 'NULL');
-
-
-
-// Configuration multer avec Cloudinary
-const upload = multer({ 
+const upload = multer({
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const mimetype = allowedTypes.test(file.mimetype);
-    
+
     if (mimetype) {
       return cb(null, true);
-    } else {
-      cb(new Error('Seules les images sont autorisées'));
     }
+    cb(new Error('Seules les images sont autorisées'));
   }
 });
 
@@ -149,8 +143,6 @@ router.delete('/:id', async (req, res, next) => {
 // Route pour upload d'image seule - MODIFIÉE
 router.post('/:id/images', upload.single('image'), async (req, res, next) => {
   try {
-    console.log('🔍 req.file:', req.file); // ← AJOUTEZ CE LOG
-    console.log('🔍 req.body:', req.body);
     if (!req.file) {
       return res.status(400).json({ success: false, message: "Aucune image fournie" });
     }
@@ -160,13 +152,11 @@ router.post('/:id/images', upload.single('image'), async (req, res, next) => {
       public_id: req.file.filename
     };
 
-    console.log('📸 imageData:', imageData);
-
     const isMain = req.body.is_main === 'true';
     const image = await service.addProductImage(req.params.id, imageData, isMain);
     res.status(201).json({ success: true, data: image });
   } catch (err) {
-    console.error('❌ Erreur upload:', err);
+    console.error('Erreur upload:', err);
     next(err);
   }
 });
@@ -235,6 +225,9 @@ router.get('/', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
   try {
     const product = await service.getOneProduct(req.params.id);
+    if (!product) {
+      return res.status(404).json({ success: false, message: 'Produit non trouvé' });
+    }
     res.json({ success: true, data: product });
   } catch (err) {
     next(err);

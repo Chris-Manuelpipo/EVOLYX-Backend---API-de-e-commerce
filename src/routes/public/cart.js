@@ -1,7 +1,8 @@
 const router = require('express').Router();
 const service = require('../../services/cartService');
+const validate = require('../../middleware/validate');
+const { mergeCartSchema } = require('../../validators/cartValidator');
 
-// Créer un panier
 router.post('/', async (req, res, next) => {
   try {
     const cart = await service.createCart();
@@ -11,7 +12,6 @@ router.post('/', async (req, res, next) => {
   }
 });
 
-// ✅ CORRIGER: Ajouter le token dans l'URL
 router.get('/:token', async (req, res, next) => {
   try {
     const cart = await service.getCart(req.params.token);
@@ -21,7 +21,6 @@ router.get('/:token', async (req, res, next) => {
   }
 });
 
-// ✅ CORRIGER: Ajouter le token dans l'URL
 router.post('/:token/items', async (req, res, next) => {
   try {
     const cart = await service.addToCart(req.params.token, req.body);
@@ -31,7 +30,15 @@ router.post('/:token/items', async (req, res, next) => {
   }
 });
 
-// ✅ CORRIGER: Ajouter le token dans l'URL
+router.post('/:token/merge', validate(mergeCartSchema), async (req, res, next) => {
+  try {
+    const cart = await service.mergeCart(req.params.token, req.body.items);
+    res.json({ success: true, data: cart });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.put('/:token/items/:itemId', async (req, res, next) => {
   try {
     const cart = await service.updateCartItem(req.params.token, req.params.itemId, req.body.quantity);
@@ -41,11 +48,19 @@ router.put('/:token/items/:itemId', async (req, res, next) => {
   }
 });
 
-// ✅ CORRIGER: Ajouter le token dans l'URL
 router.delete('/:token/items/:itemId', async (req, res, next) => {
   try {
     const cart = await service.removeFromCart(req.params.token, req.params.itemId);
     res.json({ success: true, data: cart });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/:token', async (req, res, next) => {
+  try {
+    const data = await service.clearCart(req.params.token);
+    res.json({ success: true, data });
   } catch (err) {
     next(err);
   }

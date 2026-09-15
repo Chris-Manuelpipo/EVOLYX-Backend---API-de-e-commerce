@@ -1,22 +1,220 @@
 const db = require('../config/database');
+const { v4: uuidv4 } = require('uuid');
+const HttpError = require('../utils/httpError');
+const promoService = require('./promoService');
+const { hasColumn, hasTable } = require('../utils/schema');
 
-// Création d'une commande
+const FLOW = ['pending', 'confirmed', 'preparing', 'shipped', 'delivered'];
+const PAID_STATUSES = ['confirmed', 'preparing', 'shipped', 'delivered'];
+
+const ITEM_SELECT = `
+  SELECT oi.*,
+         p.name AS product_name,
+         p.base_price,
+         v.color,
+         v.size
+  FROM order_items oi
+  LEFT JOIN products p ON oi.product_id = p.id
+  LEFT JOIN variations v ON oi.variation_id = v.id
+  WHERE oi.order_id = $1
+`;
+
+function omitInvoiceToken(order) {
+  if (!order) return order;
+  const { invoice_token, ...publicOrder } = order;
+  return publicOrder;
+}
+
+function toTrackItem(item) {
+  return {
+    product_id: item.product_id,
+    variation_id: item.variation_id || null,
+    product_name: item.product_name || null,
+    color: item.color || null,
+    size: item.size || null,
+    quantity: Number(item.quantity),
+    price: item.price,
+  };
+}
+
+function whatsappNumber() {
+  const raw = process.env.WHATSAPP_NUMBER || '237654804907';
+  return String(raw).replace(/[^\d]/g, '') || '237654804907';
+}
+
+function unitPrice(product, variation) {
+  if (variation && variation.price != null && variation.price !== '') {
+    return Number(variation.price);
+  }
+  return Number(product.base_price);
+}
+
+function buildTimeline(order, events) {
+  if (events && events.length > 0) {
+    return events.map((event) => ({
+      status: event.status,
+      at: event.created_at,
+    }));
+  }
+
+  if (order.status === 'cancelled') {
+    return [
+      { status: 'pending', at: order.created_at },
+      { status: 'cancelled', at: null },
+    ];
+  }
+
+  const index = FLOW.indexOf(order.status);
+  const reached = index >= 0 ? FLOW.slice(0, index + 1) : [order.status];
+  return reached.map((status, i) => ({
+    status,
+    at: i === 0 ? order.created_at : null,
+  }));
+}
+
+async function getStatusEvents(orderId, client = db) {
+  if (!(await hasTable('order_status_events'))) return [];
+  try {
+    const result = await client.query(
+      `SELECT status, created_at
+       FROM order_status_events
+       WHERE order_id = $1
+       ORDER BY id ASC`,
+      [orderId]
+    );
+    return result.rows;
+  } catch (err) {
+    if (err.code === '42P01') return [];
+    throw err;
+  }
+}
+
+async function ensureInvoiceToken(order, client = db) {
+  if (!order || order.invoice_token) return order;
+  if (!(await hasColumn('orders', 'invoice_token'))) return order;
+  const token = uuidv4();
+  const result = await client.query(
+    `UPDATE orders
+     SET invoice_token = $1
+     WHERE id = $2 AND invoice_token IS NULL
+     RETURNING invoice_token`,
+    [token, order.id]
+  );
+  order.invoice_token = (result.rows[0] && result.rows[0].invoice_token) || token;
+  return order;
+}
+
+async function attachTimeline(order, client = db) {
+  const events = await getStatusEvents(order.id, client);
+  order.timeline = buildTimeline(order, events);
+  return order;
+}
+
+async function applyStockDelta(client, items, sign) {
+  for (const item of items) {
+    const qty = Number(item.quantity);
+    if (item.variation_id) {
+      const variationRes = await client.query(
+        `SELECT * FROM variations WHERE id=$1 FOR UPDATE`,
+        [item.variation_id]
+      );
+      const variation = variationRes.rows[0];
+      if (!variation) {
+        throw new HttpError('Variation introuvable', 404);
+      }
+      if (sign < 0 && variation.stock < qty) {
+        throw new HttpError('Stock insuffisant', 409);
+      }
+      await client.query(
+        `UPDATE variations SET stock = stock + $1 WHERE id=$2`,
+        [sign * qty, item.variation_id]
+      );
+      await client.query(
+        `UPDATE products SET stock = GREATEST(stock + $1, 0) WHERE id=$2`,
+        [sign * qty, item.product_id]
+      );
+    } else {
+      const productRes = await client.query(
+        `SELECT * FROM products WHERE id=$1 FOR UPDATE`,
+        [item.product_id]
+      );
+      const product = productRes.rows[0];
+      if (!product) {
+        throw new HttpError('Produit introuvable', 404);
+      }
+      if (sign < 0 && product.stock < qty) {
+        throw new HttpError('Stock insuffisant', 409);
+      }
+      await client.query(
+        `UPDATE products SET stock = stock + $1 WHERE id=$2`,
+        [sign * qty, item.product_id]
+      );
+    }
+  }
+}
+
+async function getOrderItems(orderId, client = db) {
+  const itemsResult = await client.query(ITEM_SELECT, [orderId]);
+  return itemsResult.rows;
+}
+
+async function loadCartLines(client, cartToken) {
+  const cartResult = await client.query(
+    `SELECT * FROM carts WHERE cart_token = $1`,
+    [cartToken]
+  );
+  if (!cartResult.rows[0]) {
+    throw new HttpError('Panier non trouvé', 404);
+  }
+  const itemsResult = await client.query(
+    `SELECT product_id, variation_id, quantity
+     FROM cart_items
+     WHERE cart_id = $1`,
+    [cartResult.rows[0].id]
+  );
+  return { cartId: cartResult.rows[0].id, items: itemsResult.rows };
+}
+
 exports.createOrder = async (data) => {
   const client = await db.connect();
 
   try {
     await client.query('BEGIN');
 
-    const { customer_name, customer_phone, customer_address, items } = data;
+    const { customer_name, customer_phone, customer_address } = data;
+    let items = Array.isArray(data.items) ? data.items : [];
+    let cartId = null;
 
+    if (data.cart_token) {
+      try {
+        const cart = await loadCartLines(client, data.cart_token);
+        cartId = cart.cartId;
+        if (!items.length) {
+          items = cart.items;
+        }
+      } catch (error) {
+        if (!items.length) throw error;
+      }
+    }
+
+    if (!items.length) {
+      throw new HttpError('Panier vide', 400);
+    }
+
+    const insertFields = ['customer_name', 'customer_phone', 'customer_address'];
+    const insertValues = [customer_name, customer_phone, customer_address];
+    if (await hasColumn('orders', 'invoice_token')) {
+      insertFields.push('invoice_token');
+      insertValues.push(uuidv4());
+    }
+    const placeholders = insertFields.map((_, i) => `$${i + 1}`).join(',');
     const orderResult = await client.query(
-      `INSERT INTO orders(customer_name, customer_phone, customer_address)
-       VALUES($1,$2,$3) RETURNING *`,
-      [customer_name, customer_phone, customer_address]
+      `INSERT INTO orders(${insertFields.join(',')})
+       VALUES(${placeholders}) RETURNING *`,
+      insertValues
     );
 
     const order = orderResult.rows[0];
-
     let total = 0;
 
     for (const item of items) {
@@ -24,40 +222,82 @@ exports.createOrder = async (data) => {
         `SELECT * FROM products WHERE id=$1 FOR UPDATE`,
         [item.product_id]
       );
-
       const product = productResult.rows[0];
+      if (!product) {
+        throw new HttpError('Produit introuvable', 404);
+      }
+      if (product.is_active === false) {
+        throw new HttpError('Produit indisponible', 409);
+      }
 
-      if (!product) throw new Error("Produit introuvable");
+      let variation = null;
+      if (item.variation_id) {
+        const variationResult = await client.query(
+          `SELECT * FROM variations WHERE id=$1 FOR UPDATE`,
+          [item.variation_id]
+        );
+        variation = variationResult.rows[0];
+        if (!variation) {
+          throw new HttpError('Variation introuvable', 404);
+        }
+        if (Number(variation.product_id) !== Number(item.product_id)) {
+          throw new HttpError('Variation incompatible avec le produit', 400);
+        }
+        if (variation.stock < item.quantity) {
+          throw new HttpError('Stock insuffisant', 409);
+        }
+      } else if (product.stock < item.quantity) {
+        throw new HttpError('Stock insuffisant', 409);
+      }
 
-      if (product.stock < item.quantity)
-        throw new Error("Stock insuffisant");
-
-      total += product.base_price * item.quantity;
+      const price = unitPrice(product, variation);
+      total += price * item.quantity;
 
       await client.query(
         `INSERT INTO order_items(order_id, product_id, variation_id, quantity, price)
          VALUES($1,$2,$3,$4,$5)`,
-        [
-          order.id,
-          item.product_id,
-          item.variation_id || null,
-          item.quantity,
-          product.base_price
-        ]
+        [order.id, item.product_id, item.variation_id || null, item.quantity, price]
       );
     }
 
+    let discount = 0;
+    let promoCode = null;
+    if (data.promo_code) {
+      const applied = await promoService.lockAndApply(client, data.promo_code, total);
+      if (applied) {
+        discount = applied.discount;
+        promoCode = applied.promo.code;
+      }
+    }
+
+    const grandTotal = Math.max(0, Math.round((total - discount) * 100) / 100);
+
+    const updateSets = ['total_amount=$1'];
+    const updateValues = [grandTotal];
+    let updateIdx = 2;
+    if (await hasColumn('orders', 'promo_code')) {
+      updateSets.push(`promo_code=$${updateIdx++}`, `promo_discount=$${updateIdx++}`);
+      updateValues.push(promoCode, discount);
+    }
+    updateValues.push(order.id);
     await client.query(
-      `UPDATE orders SET total_amount=$1 WHERE id=$2`,
-      [total, order.id]
+      `UPDATE orders SET ${updateSets.join(', ')} WHERE id=$${updateIdx}`,
+      updateValues
     );
 
+    if (await hasTable('order_status_events')) {
+      await client.query(
+        `INSERT INTO order_status_events (order_id, status) VALUES ($1, 'pending')`,
+        [order.id]
+      );
+    }
+
+    if (cartId) {
+      await client.query(`DELETE FROM cart_items WHERE cart_id = $1`, [cartId]);
+    }
+
     await client.query('COMMIT');
-
-    // Récupérer la commande complète avec ses items
-    const completeOrder = await exports.getOrderWithItems(order.id);
-    return completeOrder;
-
+    return exports.getOrderWithItems(order.id);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -66,54 +306,40 @@ exports.createOrder = async (data) => {
   }
 };
 
-// Récupérer une commande avec ses items
 exports.getOrderWithItems = async (orderId) => {
   const orderResult = await db.query(
     `SELECT * FROM orders WHERE id = $1`,
     [orderId]
   );
-  
+
   if (orderResult.rows.length === 0) {
-    throw new Error("Commande non trouvée");
+    throw new HttpError('Commande non trouvée', 404);
   }
-  
+
   const order = orderResult.rows[0];
-  
-  const itemsResult = await db.query(
-    `SELECT oi.*, p.name as product_name 
-     FROM order_items oi
-     JOIN products p ON oi.product_id = p.id
-     WHERE oi.order_id = $1`,
-    [orderId]
-  );
-  
-  order.items = itemsResult.rows;
-  
+  await ensureInvoiceToken(order);
+  order.items = await getOrderItems(orderId);
+  await attachTimeline(order);
   return order;
 };
 
-// Créer une commande avec notification WhatsApp
 exports.createOrderWithWhatsApp = async (data) => {
-  // 1. Créer la commande en base
   const order = await exports.createOrder(data);
-  
-  // 2. Générer le message WhatsApp
   const message = exports.generateWhatsAppMessage(order);
-  
-  // 3. Encoder pour URL
   const encodedMessage = encodeURIComponent(message);
-  
-  // 4. Créer le lien WhatsApp
-  const whatsappLink = `https://wa.me/237654804907?text=${encodedMessage}`;
-  
+  const whatsappLink = `https://wa.me/${whatsappNumber()}?text=${encodedMessage}`;
+
+  const publicOrder = omitInvoiceToken(order);
+
   return {
-    order,
+    success: true,
+    order: publicOrder,
     message,
-    whatsappLink
+    whatsappLink,
+    data: { order: publicOrder, whatsappLink, message },
   };
 };
 
-// Générer le message WhatsApp
 exports.generateWhatsAppMessage = (order) => {
   let message = `🛍️ *NOUVELLE COMMANDE EVOLYX* 🛍️\n\n`;
   message += `👤 *Client:* ${order.customer_name}\n`;
@@ -122,77 +348,50 @@ exports.generateWhatsAppMessage = (order) => {
   message += `📦 *PRODUITS:*\n`;
 
   order.items.forEach((item, index) => {
-    message += `${index + 1}. ${item.product_name || `Produit #${item.product_id}`} x${item.quantity} = ${item.price * item.quantity} FCFA\n`;
+    const extras = [];
+    if (item.color) extras.push(item.color);
+    if (item.size) extras.push(item.size);
+    const variant = extras.length ? ` (${extras.join(' / ')})` : '';
+    const lineTotal = Number(item.price) * item.quantity;
+    message += `${index + 1}. ${item.product_name || `Produit #${item.product_id}`}${variant} x${item.quantity} = ${lineTotal} FCFA\n`;
   });
 
+  if (order.promo_code) {
+    message += `\n🎟️ Promo ${order.promo_code}: -${order.promo_discount} FCFA`;
+  }
   message += `\n💰 *TOTAL: ${order.total_amount} FCFA*`;
   message += `\n⏰ *Date: ${new Date().toLocaleString()}*`;
 
   return message;
 };
 
-// Confirmation de commandes
 exports.confirmOrder = async (orderId) => {
-  const client = await db.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    const items = await client.query(
-      `SELECT * FROM order_items WHERE order_id=$1`,
-      [orderId]
-    );
-
-    for (const item of items.rows) {
-
-      const productResult = await client.query(
-        `SELECT * FROM products WHERE id=$1 FOR UPDATE`,
-        [item.product_id]
-      );
-
-      const product = productResult.rows[0];
-
-      if (product.stock < item.quantity)
-        throw new Error("Stock insuffisant lors de validation");
-
-      await client.query(
-        `UPDATE products
-         SET stock = stock - $1
-         WHERE id=$2`,
-        [item.quantity, item.product_id]
-      );
-    }
-
-    await client.query(
-      `UPDATE orders SET status='confirmed' WHERE id=$1`,
-      [orderId]
-    );
-
-    await client.query('COMMIT');
-
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  return exports.updateOrderStatus(orderId, 'confirmed');
 };
 
-// Toutes les commandes
 exports.getAllOrders = async () => {
   const result = await db.query(`
-    SELECT 
+    SELECT
       o.*,
-      json_agg(
-        json_build_object(
-          'product_id', oi.product_id,
-          'variation_id', oi.variation_id,
-          'quantity', oi.quantity,
-          'price', oi.price
-        )
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'id', oi.id,
+            'product_id', oi.product_id,
+            'product_name', p.name,
+            'variation_id', oi.variation_id,
+            'color', v.color,
+            'size', v.size,
+            'quantity', oi.quantity,
+            'price', oi.price
+          )
+        ) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'
       ) AS items
     FROM orders o
     LEFT JOIN order_items oi ON o.id = oi.order_id
+    LEFT JOIN products p ON oi.product_id = p.id
+    LEFT JOIN variations v ON oi.variation_id = v.id
     GROUP BY o.id
     ORDER BY o.id DESC
   `);
@@ -200,65 +399,30 @@ exports.getAllOrders = async () => {
   return result.rows;
 };
 
-
-// ============================================
-// GET ORDER BY ID (avec détails)
-// ============================================
 exports.getOrderById = async (orderId) => {
-  const client = await db.connect();
-  
-  try {
-    // Récupérer la commande
-    const orderResult = await client.query(
-      `SELECT * FROM orders WHERE id = $1`,
-      [orderId]
-    );
-    
-    if (orderResult.rows.length === 0) {
-      throw new Error('Commande non trouvée');
-    }
-    
-    const order = orderResult.rows[0];
-    
-    // Récupérer les articles de la commande
-    const itemsResult = await client.query(
-      `SELECT oi.*, p.name as product_name, p.base_price 
-       FROM order_items oi
-       JOIN products p ON oi.product_id = p.id
-       WHERE oi.order_id = $1`,
-      [orderId]
-    );
-    
-    order.items = itemsResult.rows;
-    
-    return order;
-    
-  } catch (error) {
-    throw error;
-  } finally {
-    client.release();
-  }
+  return exports.getOrderWithItems(orderId);
 };
 
-// À AJOUTER dans src/services/orderService.js
 exports.getOrderStatus = async (orderId) => {
+  const cols = ['id', 'status', 'total_amount', 'created_at', 'customer_name', 'customer_address'];
+  if (await hasColumn('orders', 'promo_code')) {
+    cols.push('promo_code', 'promo_discount');
+  }
+
   const result = await db.query(
-    `SELECT id, status, total_amount, created_at 
-     FROM orders 
-     WHERE id = $1`,
+    `SELECT ${cols.join(', ')} FROM orders WHERE id = $1`,
     [orderId]
   );
-  
+
   if (result.rows.length === 0) {
-    throw new Error("Commande non trouvée");
+    throw new HttpError('Commande non trouvée', 404);
   }
-  
-  return result.rows[0];
+
+  const order = result.rows[0];
+  order.items = (await getOrderItems(orderId)).map(toTrackItem);
+  await attachTimeline(order);
+  return omitInvoiceToken(order);
 };
-
-//DASHBOARD Admin
-
-//Annuler une commande 
 
 exports.updateOrderStatus = async (orderId, newStatus) => {
   const client = await db.connect();
@@ -272,66 +436,36 @@ exports.updateOrderStatus = async (orderId, newStatus) => {
     );
 
     const order = orderRes.rows[0];
-    if (!order) throw new Error("Commande introuvable");
+    if (!order) {
+      throw new HttpError('Commande introuvable', 404);
+    }
 
     const current = order.status;
-
     const allowedTransitions = {
       pending: ['confirmed', 'cancelled'],
-      confirmed: ['delivered', 'cancelled'],
+      confirmed: ['preparing', 'cancelled'],
+      preparing: ['shipped', 'cancelled'],
+      shipped: ['delivered'],
       delivered: [],
-      cancelled: []
+      cancelled: [],
     };
 
-    if (!allowedTransitions[current].includes(newStatus)) {
-      throw new Error("Transition de statut non autorisée");
+    if (!allowedTransitions[current] || !allowedTransitions[current].includes(newStatus)) {
+      throw new HttpError('Transition de statut non autorisée', 409);
     }
 
-    // Décrément stock uniquement si passage à confirmed
+    const itemsRes = await client.query(
+      `SELECT * FROM order_items WHERE order_id=$1`,
+      [orderId]
+    );
+    const items = itemsRes.rows;
+
     if (current === 'pending' && newStatus === 'confirmed') {
-
-      const items = await client.query(
-        `SELECT * FROM order_items WHERE order_id=$1`,
-        [orderId]
-      );
-
-      for (const item of items.rows) {
-
-        const productRes = await client.query(
-          `SELECT * FROM products WHERE id=$1 FOR UPDATE`,
-          [item.product_id]
-        );
-
-        const product = productRes.rows[0];
-
-        if (product.stock < item.quantity)
-          throw new Error("Stock insuffisant");
-
-        await client.query(
-          `UPDATE products
-           SET stock = stock - $1
-           WHERE id=$2`,
-          [item.quantity, item.product_id]
-        );
-      }
+      await applyStockDelta(client, items, -1);
     }
 
-    // Réinjection stock si annulation depuis confirmed
-    if (current === 'confirmed' && newStatus === 'cancelled') {
-
-      const items = await client.query(
-        `SELECT * FROM order_items WHERE order_id=$1`,
-        [orderId]
-      );
-
-      for (const item of items.rows) {
-        await client.query(
-          `UPDATE products
-           SET stock = stock + $1
-           WHERE id=$2`,
-          [item.quantity, item.product_id]
-        );
-      }
+    if (newStatus === 'cancelled' && PAID_STATUSES.includes(current) && current !== 'shipped' && current !== 'delivered') {
+      await applyStockDelta(client, items, 1);
     }
 
     await client.query(
@@ -339,8 +473,15 @@ exports.updateOrderStatus = async (orderId, newStatus) => {
       [newStatus, orderId]
     );
 
-    await client.query('COMMIT');
+    if (await hasTable('order_status_events')) {
+      await client.query(
+        `INSERT INTO order_status_events (order_id, status) VALUES ($1, $2)`,
+        [orderId, newStatus]
+      );
+    }
 
+    await client.query('COMMIT');
+    return exports.getOrderWithItems(orderId);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -349,55 +490,15 @@ exports.updateOrderStatus = async (orderId, newStatus) => {
   }
 };
 
-
 exports.cancelOrder = async (orderId) => {
-  const client = await db.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    const order = await client.query(
-      `SELECT status FROM orders WHERE id=$1`,
-      [orderId]
-    );
-
-    if (order.rows[0].status !== 'confirmed')
-      throw new Error("Seules les commandes confirmées peuvent être annulées");
-
-    const items = await client.query(
-      `SELECT * FROM order_items WHERE order_id=$1`,
-      [orderId]
-    );
-
-    for (const item of items.rows) {
-      await client.query(
-        `UPDATE products
-         SET stock = stock + $1
-         WHERE id=$2`,
-        [item.quantity, item.product_id]
-      );
-    }
-
-    await client.query(
-      `UPDATE orders SET status='cancelled' WHERE id=$1`,
-      [orderId]
-    );
-
-    await client.query('COMMIT');
-
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  return exports.updateOrderStatus(orderId, 'cancelled');
 };
 
 exports.getRevenue = async () => {
   const result = await db.query(
     `SELECT SUM(total_amount) AS revenue
      FROM orders
-     WHERE status='confirmed'`
+     WHERE status IN ('confirmed', 'preparing', 'shipped', 'delivered')`
   );
 
   return result.rows[0];
@@ -414,7 +515,7 @@ exports.getStockValue = async () => {
 
 exports.getBenefice = async () => {
   const result = await db.query(
-    `SELECT SUM((base_price - cost_price) * stock) 
+    `SELECT SUM((base_price - cost_price) * stock)
      FROM products;`
   );
 

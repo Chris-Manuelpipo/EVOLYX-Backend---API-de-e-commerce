@@ -12,27 +12,32 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-// ✅ GET une catégorie par ID
-router.get('/:id', async (req, res, next) => {
+router.get('/:id/products', async (req, res, next) => {
   try {
-    const category = await categoryService.getOneCategory(req.params.id);
-    if (!category) {
-      return res.status(404).json({ success: false, message: "Catégorie non trouvée" });
-    }
-    res.json({ success: true, data: category });
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+
+    const result = await productService.getProductsByCategory(req.params.id, page, limit, { publicOnly: true });
+    res.json({
+      success: true,
+      data: result.products,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      totalPages: result.totalPages,
+    });
   } catch (err) {
     next(err);
   }
 });
 
-// ✅ GET produits d'une catégorie
-router.get('/:id/products', async (req, res, next) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    
-    const products = await productService.getProductsByCategory(req.params.id, page, limit);
-    res.json({ success: true, data: products });
+    const category = await categoryService.getOneCategory(req.params.id);
+    if (!category) {
+      return res.status(404).json({ success: false, message: 'Catégorie non trouvée' });
+    }
+    res.json({ success: true, data: category });
   } catch (err) {
     next(err);
   }

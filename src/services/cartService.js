@@ -1,6 +1,7 @@
 
 const db = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
+const HttpError = require('../utils/httpError');
 
 // Créer un nouveau panier
 exports.createCart = async () => {
@@ -24,25 +25,34 @@ exports.getCart = async (cartToken) => {
   );
   
   if (cartResult.rows.length === 0) {
-    throw new Error("Panier non trouvé");
+    throw new HttpError('Panier non trouvé', 404);
   }
   
   const cart = cartResult.rows[0];
   
   // Récupérer les articles du panier
   const itemsResult = await db.query(
-    `SELECT ci.*, p.name, p.base_price, p.image 
+    `SELECT ci.*, p.name, p.base_price,
+            COALESCE(v.price, p.base_price) AS unit_price,
+            (
+              SELECT pi.image_url
+              FROM product_images pi
+              WHERE pi.product_id = p.id
+              ORDER BY pi.is_main DESC NULLS LAST, pi.sort_order ASC
+              LIMIT 1
+            ) AS image,
+            v.color, v.size
      FROM cart_items ci
      JOIN products p ON ci.product_id = p.id
+     LEFT JOIN variations v ON ci.variation_id = v.id
      WHERE ci.cart_id = $1`,
     [cart.id]
   );
   
   cart.items = itemsResult.rows;
   
-  // Calculer le total
   cart.total = itemsResult.rows.reduce(
-    (sum, item) => sum + (item.base_price * item.quantity), 
+    (sum, item) => sum + (Number(item.unit_price) * item.quantity),
     0
   );
   
@@ -63,16 +73,19 @@ exports.addToCart = async (cartToken, { product_id, quantity = 1, variation_id =
     );
     
     if (cartResult.rows.length === 0) {
-      throw new Error("Panier non trouvé");
+      throw new HttpError('Panier non trouvé', 404);
     }
     
     const cartId = cartResult.rows[0].id;
     
     // Vérifier si l'article existe déjà
     const existingItem = await client.query(
-      `SELECT id, quantity FROM cart_items 
-       WHERE cart_id = $1 AND product_id = $2 
-       AND (variation_id IS NULL AND $3 IS NULL OR variation_id = $3)`,
+      `SELECT id, quantity FROM cart_items
+       WHERE cart_id = $1 AND product_id = $2
+         AND (
+           ($3::int IS NULL AND variation_id IS NULL)
+           OR variation_id = $3::int
+         )`,
       [cartId, product_id, variation_id]
     );
     
@@ -125,7 +138,7 @@ exports.updateCartItem = async (cartToken, itemId, quantity) => {
     );
     
     if (cartResult.rows.length === 0) {
-      throw new Error("Article non trouvé dans ce panier");
+      throw new HttpError('Article non trouvé dans ce panier', 404);
     }
     
     await client.query(
@@ -161,7 +174,7 @@ exports.removeFromCart = async (cartToken, itemId) => {
     );
     
     if (cartResult.rows.length === 0) {
-      throw new Error("Article non trouvé dans ce panier");
+      throw new HttpError('Article non trouvé dans ce panier', 404);
     }
     
     await client.query(
@@ -212,7 +225,50 @@ exports.clearCart = async (cartToken) => {
   }
 };
 
-// Fonction utilitaire pour générer un token
-function generateToken() {
-  return 'cart_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-}
+exports.mergeCart = async (cartToken, items = []) => {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const cartResult = await client.query(
+      `SELECT * FROM carts WHERE cart_token = $1 FOR UPDATE`,
+      [cartToken]
+    );
+    if (!cartResult.rows[0]) {
+      throw new HttpError('Panier non trouvé', 404);
+    }
+
+    const cartId = cartResult.rows[0].id;
+    await client.query(`DELETE FROM cart_items WHERE cart_id = $1`, [cartId]);
+
+    const lines = new Map();
+    for (const item of items) {
+      const productId = Number(item.product_id);
+      if (!productId || !item.quantity) continue;
+      const variationId = item.variation_id ? Number(item.variation_id) : null;
+      const key = `${productId}:${variationId || 0}`;
+      const prev = lines.get(key);
+      const quantity = Number(item.quantity) || 1;
+      lines.set(key, {
+        product_id: productId,
+        variation_id: variationId,
+        quantity: prev ? prev.quantity + quantity : quantity,
+      });
+    }
+
+    for (const line of lines.values()) {
+      await client.query(
+        `INSERT INTO cart_items (cart_id, product_id, variation_id, quantity)
+         VALUES ($1, $2, $3, $4)`,
+        [cartId, line.product_id, line.variation_id, line.quantity]
+      );
+    }
+
+    await client.query('COMMIT');
+    return exports.getCart(cartToken);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};

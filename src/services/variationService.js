@@ -1,18 +1,29 @@
 const db = require('../config/database');
+const HttpError = require('../utils/httpError');
+const { hasColumn } = require('../utils/schema');
 
 // ==================== CRUD COMPLET ====================
 
 // CREATE - Ajouter une variation
 exports.createVariation = async (data) => {
-    const { product_id, color, size, stock } = data;
-    
+    const { product_id, color, size, stock, price } = data;
+
+    const fields = ['product_id', 'color', 'size', 'stock'];
+    const values = [product_id, color, size, stock || 0];
+
+    if (price !== undefined && await hasColumn('variations', 'price')) {
+        fields.push('price');
+        values.push(price);
+    }
+
+    const placeholders = fields.map((_, i) => `$${i + 1}`).join(', ');
     const result = await db.query(
-        `INSERT INTO variations (product_id, color, size, stock)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO variations (${fields.join(', ')})
+         VALUES (${placeholders})
          RETURNING *`,
-        [product_id, color, size, stock || 0]
+        values
     );
-    
+
     return result.rows[0];
 };
 
@@ -80,18 +91,39 @@ exports.getVariationsByProduct = async (productId) => {
 
 // UPDATE - Modifier une variation
 exports.updateVariation = async (id, data) => {
-    const { color, size, stock } = data;
-    
+    const { color, size, stock, price } = data;
+
+    const fields = [];
+    const values = [];
+    let param = 1;
+
+    if (color !== undefined) {
+        fields.push(`color = $${param++}`);
+        values.push(color);
+    }
+    if (size !== undefined) {
+        fields.push(`size = $${param++}`);
+        values.push(size);
+    }
+    if (stock !== undefined) {
+        fields.push(`stock = $${param++}`);
+        values.push(stock);
+    }
+    if (price !== undefined && await hasColumn('variations', 'price')) {
+        fields.push(`price = $${param++}`);
+        values.push(price);
+    }
+
+    if (fields.length === 0) {
+        return exports.getVariationById(id);
+    }
+
+    values.push(id);
     const result = await db.query(
-        `UPDATE variations 
-         SET color = COALESCE($1, color),
-             size = COALESCE($2, size),
-             stock = COALESCE($3, stock)
-         WHERE id = $4
-         RETURNING *`,
-        [color, size, stock, id]
+        `UPDATE variations SET ${fields.join(', ')} WHERE id = $${param} RETURNING *`,
+        values
     );
-    
+
     return result.rows[0];
 };
 
@@ -119,7 +151,7 @@ exports.decrementStock = async (id, quantity = 1) => {
     );
     
     if (result.rows.length === 0) {
-        throw new Error('Stock insuffisant ou variation introuvable');
+        throw new HttpError('Stock insuffisant ou variation introuvable', 409);
     }
     
     return result.rows[0];
@@ -139,7 +171,7 @@ exports.checkStock = async (id, requestedQuantity) => {
     );
     
     if (result.rows.length === 0) {
-        throw new Error('Variation introuvable');
+        throw new HttpError('Variation introuvable', 404);
     }
     
     return result.rows[0].stock >= requestedQuantity;

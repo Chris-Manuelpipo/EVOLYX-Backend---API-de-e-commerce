@@ -14,11 +14,13 @@ echo -e "${BLUE}═════════════════════�
 echo -e "${YELLOW}           TEST CRÉATION PRODUIT AVEC IMAGE${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}\n"
 
-# 1. LOGIN ADMIN
+# 1. LOGIN ADMIN — identifiants via l'environnement
+#   export ADMIN_EMAIL="..."
+#   export ADMIN_PASSWORD="..."
 echo -e "${CYAN}🔐 Connexion admin...${NC}"
 TOKEN=$(curl -s -X POST $BASE_URL/admin/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@email.com","password":"password"}' \
+  -d "{\"email\":\"${ADMIN_EMAIL:?Définir ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD:?Définir ADMIN_PASSWORD}\"}" \
   | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
 
 if [ -z "$TOKEN" ]; then

@@ -14,5 +14,8 @@ router.use('/stats', require('./stats'));
 router.use('/admins', require('./admins'));
 router.use('/categories', require('./categories'));
 router.use('/variations', require('./variations'));
+router.use('/promos', require('./promos'));
+router.use('/returns', require('./returns'));
+router.use('/reviews', require('./reviews'));
 
 module.exports = router;

@@ -1,36 +1,49 @@
-// Créez un fichier temporaire: scripts/create-admin.js
 const bcrypt = require('bcrypt');
-const db = require('./src/config/database'); // Ajustez le chemin
+const db = require('./src/config/database');
+require('dotenv').config({ quiet: true });
 
 async function createNewAdmin() {
   try {
-    const email = 'evolyxcmr@gmail.com';
-    const password = 'mbalach';
-    const role = 'super_admin';
+    const email = process.env.ADMIN_EMAIL;
+    const password = process.env.ADMIN_PASSWORD;
+    const role = process.env.ADMIN_ROLE || 'super_admin';
 
-    // Hasher le mot de passe (comme dans votre controller)
+    if (!email || !password) {
+      console.error('Définir ADMIN_EMAIL et ADMIN_PASSWORD (voir .env.example).');
+      process.exit(1);
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Supprimer l'ancien admin (optionnel)
-    await db.query(`DELETE FROM admins WHERE email = 'admin@email.com'`);
-
-    // Créer le nouvel admin
-    const result = await db.query(
-      `INSERT INTO admins(email, password, role)
-       VALUES($1, $2, $3)
-       RETURNING id, email, role`,
-      [email, hashedPassword, role]
+    const existing = await db.query(
+      `SELECT id FROM admins WHERE email = $1`,
+      [email]
     );
 
-    console.log('✅ Nouvel admin créé avec succès !');
-    console.log('📧 Email:', result.rows[0].email);
-    console.log('👤 Rôle:', result.rows[0].role);
-    
+    let result;
+    if (existing.rows.length > 0) {
+      result = await db.query(
+        `UPDATE admins SET password = $1, role = $2 WHERE email = $3
+         RETURNING id, email, role`,
+        [hashedPassword, role, email]
+      );
+    } else {
+      result = await db.query(
+        `INSERT INTO admins(email, password, role)
+         VALUES($1, $2, $3)
+         RETURNING id, email, role`,
+        [email, hashedPassword, role]
+      );
+    }
+
+    console.log('Admin créé ou mis à jour.');
+    console.log('Email:', result.rows[0].email);
+    console.log('Rôle:', result.rows[0].role);
+
     process.exit(0);
   } catch (error) {
-    console.error('❌ Erreur:', error);
+    console.error('Erreur création admin:', error.message);
     process.exit(1);
   }
-} 
+}
 
 createNewAdmin();
