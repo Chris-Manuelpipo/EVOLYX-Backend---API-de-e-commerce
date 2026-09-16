@@ -1,5 +1,5 @@
 const db = require('../config/database');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const HttpError = require('../utils/httpError');
 const promoService = require('./promoService');
 const { hasColumn, hasTable } = require('../utils/schema');
@@ -92,7 +92,7 @@ async function getStatusEvents(orderId, client = db) {
 async function ensureInvoiceToken(order, client = db) {
   if (!order || order.invoice_token) return order;
   if (!(await hasColumn('orders', 'invoice_token'))) return order;
-  const token = uuidv4();
+  const token = randomUUID();
   const result = await client.query(
     `UPDATE orders
      SET invoice_token = $1
@@ -205,7 +205,7 @@ exports.createOrder = async (data) => {
     const insertValues = [customer_name, customer_phone, customer_address];
     if (await hasColumn('orders', 'invoice_token')) {
       insertFields.push('invoice_token');
-      insertValues.push(uuidv4());
+      insertValues.push(randomUUID());
     }
     const placeholders = insertFields.map((_, i) => `$${i + 1}`).join(',');
     const orderResult = await client.query(

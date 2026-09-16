@@ -1,5 +1,5 @@
 const db = require('../config/database');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const HttpError = require('../utils/httpError');
 
 const ITEM_SELECT = `
@@ -42,7 +42,7 @@ exports.createWishlist = async (token) => {
     }
   }
 
-  const wishlistToken = token || uuidv4();
+  const wishlistToken = token || randomUUID();
   await db.query(
     `INSERT INTO wishlists (token, created_at) VALUES ($1, NOW()) RETURNING *`,
     [wishlistToken]

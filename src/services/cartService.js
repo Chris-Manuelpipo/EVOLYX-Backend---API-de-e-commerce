@@ -1,11 +1,11 @@
 
 const db = require('../config/database');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const HttpError = require('../utils/httpError');
 
 // Créer un nouveau panier
 exports.createCart = async () => {
-  const cartToken = uuidv4(); // Génère un vrai UUID: "123e4567-e89b-12d3-a456-426614174000"
+  const cartToken = randomUUID();
   
   const result = await db.query(
     `INSERT INTO carts (cart_token, created_at) 
