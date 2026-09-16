@@ -1,23 +1,21 @@
 const router = require('express').Router();
 
-const categoryRoutes = require('./public/categories');
-const productRoutes = require('./public/products');
-const variationRoutes = require('./public/variations');
-const orderRoutes = require('./public/orders');
-const cartRoutes = require('./public/cart');
-const promoRoutes = require('./public/promos');
-const wishlistRoutes = require('./public/wishlist');
-const legalRoutes = require('./public/legal');
-const adminRoutes = require('./admin');
+router.use('/categories', require('./public/categories'));
+router.use('/products', require('./public/products'));
+router.use('/variations', require('./public/variations'));
+router.use('/orders', require('./public/orders'));
+router.use('/cart', require('./public/cart'));
+router.use('/promos', require('./public/promos'));
+router.use('/wishlist', require('./public/wishlist'));
+router.use('/legal', require('./public/legal'));
 
-router.use('/categories', categoryRoutes);
-router.use('/products', productRoutes);
-router.use('/variations', variationRoutes);
-router.use('/orders', orderRoutes);
-router.use('/cart', cartRoutes);
-router.use('/promos', promoRoutes);
-router.use('/wishlist', wishlistRoutes);
-router.use('/legal', legalRoutes);
-router.use('/admin', adminRoutes);
+// Admin (pdfkit, multer, etc.) chargé seulement sur /api/admin/*
+router.use('/admin', (req, res, next) => {
+  try {
+    require('./admin')(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+});
 
 module.exports = router;

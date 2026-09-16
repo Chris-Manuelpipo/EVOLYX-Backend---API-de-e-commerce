@@ -1,6 +1,10 @@
-const PDFDocument = require('pdfkit');
 const company = require('../config/company');
 const HttpError = require('../utils/httpError');
+
+function createPdfDocument(options) {
+  const PDFDocument = require('pdfkit');
+  return new PDFDocument(options);
+}
 
 const MARGIN = 52;
 const GOLD = '#D4AF37';
@@ -391,7 +395,7 @@ exports.buildPdf = function buildPdf(order) {
   }
 
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({
+    const doc = createPdfDocument({
       size: 'A4',
       margins: { top: MARGIN, left: MARGIN, right: MARGIN, bottom: 0 },
       bufferPages: true,
