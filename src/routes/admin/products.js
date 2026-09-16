@@ -89,7 +89,7 @@ const service = require('../../services/productService');
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 8 * 1024 * 1024, files: 12 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const mimetype = allowedTypes.test(file.mimetype);
@@ -102,7 +102,7 @@ const upload = multer({
 });
 
 // CRUD Produits avec images - MODIFIÉ
-router.post('/', upload.array('images', 5), async (req, res, next) => {
+router.post('/', upload.array('images', 12), async (req, res, next) => {
   try {
     // ✅ Récupérer les URLs Cloudinary des fichiers uploadés
     const imageUrls = req.files ? req.files.map(file => ({
@@ -117,7 +117,7 @@ router.post('/', upload.array('images', 5), async (req, res, next) => {
   }
 });
 
-router.put('/:id', upload.array('images', 5), async (req, res, next) => {
+router.put('/:id', upload.array('images', 12), async (req, res, next) => {
   try {
     const imageUrls = req.files ? req.files.map(file => ({
       url: file.path,

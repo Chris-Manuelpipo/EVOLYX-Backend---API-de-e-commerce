@@ -441,6 +441,14 @@ exports.addProductImage = async (productId, file, isMain = false) => {
   
   try {
     await client.query('BEGIN');
+
+    const countResult = await client.query(
+      `SELECT COUNT(*)::int AS n FROM product_images WHERE product_id = $1`,
+      [productId]
+    );
+    const existingCount = countResult.rows[0].n;
+    if (existingCount === 0) isMain = true;
+
     if (isMain) {
       await client.query(
         `UPDATE product_images SET is_main = false WHERE product_id = $1`,

@@ -13,11 +13,18 @@ function getStorage() {
   const { CloudinaryStorage } = require('multer-storage-cloudinary');
   storage = new CloudinaryStorage({
     cloudinary,
-    params: {
-      folder: 'evolyx/products',
-      allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
-      transformation: [{ width: 800, height: 800, crop: 'limit' }],
-      format: 'webp',
+    params: async (_req, file) => {
+      const base = String(file.originalname || 'image')
+        .replace(/\.[^.]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .slice(0, 40) || 'image';
+      return {
+        folder: 'evolyx/products',
+        public_id: `${base}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+        transformation: [{ width: 1200, height: 1200, crop: 'limit' }],
+        format: 'webp',
+      };
     },
   });
   return storage;
