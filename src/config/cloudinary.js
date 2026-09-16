@@ -6,33 +6,52 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-let storage;
+function assertCloudinaryConfig() {
+  if (
+    !process.env.CLOUDINARY_CLOUD_NAME ||
+    !process.env.CLOUDINARY_API_KEY ||
+    !process.env.CLOUDINARY_API_SECRET
+  ) {
+    const err = new Error('Configuration Cloudinary manquante sur le serveur');
+    err.status = 503;
+    throw err;
+  }
+}
 
-function getStorage() {
-  if (storage) return storage;
-  const { CloudinaryStorage } = require('multer-storage-cloudinary');
-  storage = new CloudinaryStorage({
-    cloudinary,
-    params: async (_req, file) => {
-      const base = String(file.originalname || 'image')
-        .replace(/\.[^.]+$/, '')
-        .replace(/[^a-zA-Z0-9_-]/g, '_')
-        .slice(0, 40) || 'image';
-      return {
+function uploadImageBuffer(buffer, originalname = 'image') {
+  assertCloudinaryConfig();
+  const base = String(originalname || 'image')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 40) || 'image';
+
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
         folder: 'evolyx/products',
         public_id: `${base}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
-        transformation: [{ width: 1200, height: 1200, crop: 'limit' }],
+        resource_type: 'image',
         format: 'webp',
-      };
-    },
+        transformation: [{ width: 1200, height: 1200, crop: 'limit' }],
+      },
+      (err, result) => {
+        if (err) {
+          err.status = 502;
+          reject(err);
+          return;
+        }
+        resolve({
+          url: result.secure_url || result.url,
+          public_id: result.public_id,
+        });
+      }
+    );
+    stream.end(buffer);
   });
-  return storage;
 }
 
 module.exports = {
   cloudinary,
-  get storage() {
-    return getStorage();
-  },
+  uploadImageBuffer,
+  assertCloudinaryConfig,
 };

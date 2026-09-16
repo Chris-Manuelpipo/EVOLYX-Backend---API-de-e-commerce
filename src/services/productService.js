@@ -77,17 +77,35 @@ function paginationMeta(total, page, limit) {
 
 // CREATE avec images (version Cloudinary)
 exports.createProduct = async (data, imageUrls = []) => {
+  const name = String(data.name || '').trim();
+  const base_price = Number(data.base_price);
+  const stock = Number.parseInt(data.stock, 10);
+  const category_id = data.category_id === '' || data.category_id == null
+    ? null
+    : Number.parseInt(data.category_id, 10);
+
+  if (!name) throw new HttpError('Le nom du produit est requis', 400);
+  if (!Number.isFinite(base_price) || base_price <= 0) {
+    throw new HttpError('Le prix doit être un nombre positif', 400);
+  }
+  if (!Number.isFinite(stock) || stock < 0) {
+    throw new HttpError('Le stock est invalide', 400);
+  }
+  if (category_id != null && !Number.isFinite(category_id)) {
+    throw new HttpError('Catégorie invalide', 400);
+  }
+
   const client = await db.connect();
   
   try {
     await client.query('BEGIN');
     
-    const { name, description, base_price, cost_price, stock, category_id } = data;
+    const { description, cost_price } = data;
     const is_featured = toBool(data.is_featured);
     const is_active = toBool(data.is_active);
 
     const fields = ['name', 'description', 'base_price', 'stock', 'category_id'];
-    const values = [name, description, base_price, stock, category_id];
+    const values = [name, description ?? null, base_price, stock, category_id];
 
     if (await hasColumn('products', 'cost_price')) {
       fields.push('cost_price');
