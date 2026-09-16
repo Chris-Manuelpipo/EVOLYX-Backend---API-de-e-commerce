@@ -1,9 +1,13 @@
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../../config/database');
 
 const INVALID_CREDENTIALS = 'Identifiants invalides';
-const DUMMY_HASH = bcrypt.hashSync('invalid-password-dummy', 10);
+let dummyHash;
+function getDummyHash() {
+  if (!dummyHash) dummyHash = bcrypt.hashSync('invalid-password-dummy', 10);
+  return dummyHash;
+}
 
 exports.login = async (req, res, next) => {
   try {
@@ -24,7 +28,7 @@ exports.login = async (req, res, next) => {
     const admin = result.rows[0];
     let match = false;
     try {
-      match = await bcrypt.compare(password, admin ? admin.password : DUMMY_HASH);
+      match = await bcrypt.compare(password, admin ? admin.password : getDummyHash());
     } catch {
       match = false;
     }

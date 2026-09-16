@@ -35,7 +35,11 @@ app.use('/uploads', (req, res, next) => {
 }, express.static(path.join(__dirname, '../uploads')));
 
 app.use('/api', (req, res, next) => {
-  require('./routes')(req, res, next);
+  try {
+    require('./routes')(req, res, next);
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.use(errorHandler);

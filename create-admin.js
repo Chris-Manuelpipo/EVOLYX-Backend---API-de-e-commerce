@@ -1,5 +1,5 @@
 require('./src/config/loadEnv');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const db = require('./src/config/database');
 
 async function createNewAdmin() {
