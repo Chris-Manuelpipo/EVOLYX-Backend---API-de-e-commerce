@@ -95,7 +95,13 @@ exports.createProduct = async (data, imageUrls = []) => {
     throw new HttpError('Catégorie invalide', 400);
   }
 
+  // Avant db.connect() : sur Vercel le pool a 1 connexion max.
+  const hasCost = await hasColumn('products', 'cost_price');
+  const hasFeatured = await hasColumn('products', 'is_featured');
+  const hasActive = await hasColumn('products', 'is_active');
+
   const client = await db.connect();
+  let productId;
   
   try {
     await client.query('BEGIN');
@@ -107,15 +113,15 @@ exports.createProduct = async (data, imageUrls = []) => {
     const fields = ['name', 'description', 'base_price', 'stock', 'category_id'];
     const values = [name, description ?? null, base_price, stock, category_id];
 
-    if (await hasColumn('products', 'cost_price')) {
+    if (hasCost) {
       fields.push('cost_price');
       values.push(cost_price ?? null);
     }
-    if (is_featured !== undefined && await hasColumn('products', 'is_featured')) {
+    if (is_featured !== undefined && hasFeatured) {
       fields.push('is_featured');
       values.push(is_featured);
     }
-    if (is_active !== undefined && await hasColumn('products', 'is_active')) {
+    if (is_active !== undefined && hasActive) {
       fields.push('is_active');
       values.push(is_active);
     }
@@ -129,6 +135,7 @@ exports.createProduct = async (data, imageUrls = []) => {
     );
     
     const product = productResult.rows[0];
+    productId = product.id;
     
     // Ajouter les images avec leurs URLs Cloudinary
     if (imageUrls && imageUrls.length > 0) {
@@ -142,14 +149,14 @@ exports.createProduct = async (data, imageUrls = []) => {
     }
     
     await client.query('COMMIT');
-    return await exports.getOneProduct(product.id);
-    
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
   }
+
+  return exports.getOneProduct(productId);
 };
 
 // Ajouter cette méthode
@@ -204,6 +211,11 @@ exports.getOneProduct = async (id, options = {}) => {
 // UPDATE avec images
 // REMPLACEZ la fonction updateProduct par :
 exports.updateProduct = async (id, data, imageUrls = []) => {
+  // Avant db.connect() : éviter le deadlock pool max=1 sur Vercel
+  const hasCost = await hasColumn('products', 'cost_price');
+  const hasFeatured = await hasColumn('products', 'is_featured');
+  const hasActive = await hasColumn('products', 'is_active');
+
   const client = await db.connect();
   
   try {
@@ -232,7 +244,7 @@ exports.updateProduct = async (id, data, imageUrls = []) => {
       values.push(base_price);
       paramCount++;
     }
-    if (cost_price !== undefined && await hasColumn('products', 'cost_price')) {
+    if (cost_price !== undefined && hasCost) {
       query += `cost_price = $${paramCount}, `;
       values.push(cost_price);
       paramCount++;
@@ -247,12 +259,12 @@ exports.updateProduct = async (id, data, imageUrls = []) => {
       values.push(category_id);
       paramCount++;
     }
-    if (is_featured !== undefined && await hasColumn('products', 'is_featured')) {
+    if (is_featured !== undefined && hasFeatured) {
       query += `is_featured = $${paramCount}, `;
       values.push(is_featured);
       paramCount++;
     }
-    if (is_active !== undefined && await hasColumn('products', 'is_active')) {
+    if (is_active !== undefined && hasActive) {
       query += `is_active = $${paramCount}, `;
       values.push(is_active);
       paramCount++;
@@ -284,19 +296,21 @@ exports.updateProduct = async (id, data, imageUrls = []) => {
     }
     
     await client.query('COMMIT');
-    
-    return await exports.getOneProduct(id);
-    
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
   }
+
+  return exports.getOneProduct(id);
 };
 
 // DELETE avec gestion des contraintes 
 exports.deleteProduct = async (id) => {
+  const hasWishlist = await hasTable('wishlist_items');
+  const hasReviews = await hasTable('reviews');
+
   const client = await db.connect();
   try {
     await client.query('BEGIN');
@@ -317,10 +331,10 @@ exports.deleteProduct = async (id) => {
     // Supprimer les références
     await client.query(`DELETE FROM order_items WHERE product_id = $1`, [id]);
     await client.query(`DELETE FROM cart_items WHERE product_id = $1`, [id]);
-    if (await hasTable('wishlist_items')) {
+    if (hasWishlist) {
       await client.query(`DELETE FROM wishlist_items WHERE product_id = $1`, [id]);
     }
-    if (await hasTable('reviews')) {
+    if (hasReviews) {
       await client.query(`DELETE FROM reviews WHERE product_id = $1`, [id]);
     }
     await client.query(`DELETE FROM product_images WHERE product_id = $1`, [id]);

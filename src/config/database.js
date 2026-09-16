@@ -10,7 +10,8 @@ function getPool() {
   const ssl = shouldUseSsl(cfg.host);
   pool = new Pool({
     ...toPgOptions(cfg),
-    max: process.env.VERCEL ? 1 : 10,
+    // Vercel : au moins 2 pour éviter les deadlocks (transaction + hasColumn).
+    max: process.env.VERCEL ? 3 : 10,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
   });

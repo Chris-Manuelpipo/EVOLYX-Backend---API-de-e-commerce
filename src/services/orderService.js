@@ -176,7 +176,12 @@ async function loadCartLines(client, cartToken) {
 }
 
 exports.createOrder = async (data) => {
+  const hasInvoiceToken = await hasColumn('orders', 'invoice_token');
+  const hasPromoCode = await hasColumn('orders', 'promo_code');
+  const hasStatusEvents = await hasTable('order_status_events');
+
   const client = await db.connect();
+  let orderId;
 
   try {
     await client.query('BEGIN');
@@ -203,7 +208,7 @@ exports.createOrder = async (data) => {
 
     const insertFields = ['customer_name', 'customer_phone', 'customer_address'];
     const insertValues = [customer_name, customer_phone, customer_address];
-    if (await hasColumn('orders', 'invoice_token')) {
+    if (hasInvoiceToken) {
       insertFields.push('invoice_token');
       insertValues.push(randomUUID());
     }
@@ -275,7 +280,7 @@ exports.createOrder = async (data) => {
     const updateSets = ['total_amount=$1'];
     const updateValues = [grandTotal];
     let updateIdx = 2;
-    if (await hasColumn('orders', 'promo_code')) {
+    if (hasPromoCode) {
       updateSets.push(`promo_code=$${updateIdx++}`, `promo_discount=$${updateIdx++}`);
       updateValues.push(promoCode, discount);
     }
@@ -285,7 +290,7 @@ exports.createOrder = async (data) => {
       updateValues
     );
 
-    if (await hasTable('order_status_events')) {
+    if (hasStatusEvents) {
       await client.query(
         `INSERT INTO order_status_events (order_id, status) VALUES ($1, 'pending')`,
         [order.id]
@@ -297,13 +302,15 @@ exports.createOrder = async (data) => {
     }
 
     await client.query('COMMIT');
-    return exports.getOrderWithItems(order.id);
+    orderId = order.id;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
   }
+
+  return exports.getOrderWithItems(orderId);
 };
 
 exports.getOrderWithItems = async (orderId) => {
@@ -425,6 +432,7 @@ exports.getOrderStatus = async (orderId) => {
 };
 
 exports.updateOrderStatus = async (orderId, newStatus) => {
+  const hasStatusEvents = await hasTable('order_status_events');
   const client = await db.connect();
 
   try {
@@ -473,7 +481,7 @@ exports.updateOrderStatus = async (orderId, newStatus) => {
       [newStatus, orderId]
     );
 
-    if (await hasTable('order_status_events')) {
+    if (hasStatusEvents) {
       await client.query(
         `INSERT INTO order_status_events (order_id, status) VALUES ($1, $2)`,
         [orderId, newStatus]
@@ -481,13 +489,14 @@ exports.updateOrderStatus = async (orderId, newStatus) => {
     }
 
     await client.query('COMMIT');
-    return exports.getOrderWithItems(orderId);
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
   }
+
+  return exports.getOrderWithItems(orderId);
 };
 
 exports.cancelOrder = async (orderId) => {
