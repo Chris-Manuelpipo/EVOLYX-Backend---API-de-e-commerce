@@ -225,3 +225,42 @@ CREATE INDEX IF NOT EXISTS idx_reviews_product ON reviews(product_id);
 CREATE INDEX IF NOT EXISTS idx_wishlist_items_wishlist ON wishlist_items(wishlist_id);
 CREATE UNIQUE INDEX IF NOT EXISTS cart_items_line_uidx
   ON cart_items (cart_id, product_id, COALESCE(variation_id, 0));
+
+-- Catégories : un seul nom (insensible à la casse / espaces).
+DO $$
+BEGIN
+  UPDATE products p
+  SET category_id = d.keeper_id
+  FROM (
+    SELECT c.id AS dup_id, m.keeper_id
+    FROM categories c
+    INNER JOIN (
+      SELECT lower(trim(name)) AS n, MIN(id) AS keeper_id
+      FROM categories
+      GROUP BY lower(trim(name))
+      HAVING COUNT(*) > 1
+    ) m ON lower(trim(c.name)) = m.n
+    WHERE c.id <> m.keeper_id
+  ) d
+  WHERE p.category_id = d.dup_id;
+
+  DELETE FROM categories c
+  USING (
+    SELECT c2.id AS dup_id
+    FROM categories c2
+    INNER JOIN (
+      SELECT lower(trim(name)) AS n, MIN(id) AS keeper_id
+      FROM categories
+      GROUP BY lower(trim(name))
+      HAVING COUNT(*) > 1
+    ) m ON lower(trim(c2.name)) = m.n
+    WHERE c2.id <> m.keeper_id
+  ) d
+  WHERE c.id = d.dup_id;
+
+  UPDATE categories SET name = trim(regexp_replace(name, '\s+', ' ', 'g'))
+  WHERE name IS DISTINCT FROM trim(regexp_replace(name, '\s+', ' ', 'g'));
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS categories_name_lower_uidx
+  ON categories (lower(trim(name)));

@@ -15,7 +15,13 @@ module.exports = (err, req, res, next) => {
       status = 401;
     } else if (/stock insuffisant|transition de statut|existe déjà|duplicate|indisponible/.test(lower) || pgCode === '23505') {
       status = 409;
-      if (pgCode === '23505') message = 'Conflit: ressource déjà existante';
+      if (pgCode === '23505') {
+      if (/categories_name_lower/i.test(String(err.constraint || err.message || ''))) {
+        message = 'Une catégorie avec ce nom existe déjà';
+      } else {
+        message = 'Conflit: ressource déjà existante';
+      }
+    }
     } else if (pgCode === '23503') {
       status = 400;
       message = 'Référence invalide';
