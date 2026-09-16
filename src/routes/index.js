@@ -19,8 +19,5 @@ router.use('/promos', promoRoutes);
 router.use('/wishlist', wishlistRoutes);
 router.use('/legal', legalRoutes);
 router.use('/admin', adminRoutes);
-router.get('/health', (req, res) => {
-  res.json({ status: 'API Running' });
-});
 
 module.exports = router;

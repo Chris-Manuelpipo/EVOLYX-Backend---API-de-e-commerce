@@ -1,6 +1,6 @@
 // debug-upload.js
 const cloudinary = require('cloudinary').v2;
-require('dotenv').config();
+require('./src/config/loadEnv');
 
 console.log('🔍 Vérification configuration Cloudinary:');
 console.log('CLOUDINARY_CLOUD_NAME:', process.env.CLOUDINARY_CLOUD_NAME ? '✅' : '❌');

@@ -1,6 +1,6 @@
+require('./src/config/loadEnv');
 const bcrypt = require('bcrypt');
 const db = require('./src/config/database');
-require('dotenv').config({ quiet: true });
 
 async function createNewAdmin() {
   try {

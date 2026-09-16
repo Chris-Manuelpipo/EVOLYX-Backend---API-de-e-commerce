@@ -1,4 +1,4 @@
-require('dotenv').config({ quiet: true });
+require('../config/loadEnv');
 const { Client } = require('pg');
 const { resolveConfig, toPgOptions } = require('../config/databaseConfig');
 

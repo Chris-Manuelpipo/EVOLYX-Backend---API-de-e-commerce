@@ -1,4 +1,4 @@
-require('dotenv').config({ quiet: true });
+require('../config/loadEnv');
 const { spawn } = require('child_process');
 const path = require('path');
 const { resolveConfig } = require('../config/databaseConfig');

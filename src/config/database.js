@@ -1,11 +1,27 @@
-require('dotenv').config({ quiet: true });
+require('./loadEnv');
 const { Pool } = require('pg');
 const { resolveConfig, shouldUseSsl, toPgOptions } = require('./databaseConfig');
 
-const cfg = resolveConfig();
-const ssl = shouldUseSsl(cfg.host);
-const pool = new Pool(toPgOptions(cfg));
+let pool;
 
-console.log(`Postgres: host=${cfg.host} db=${cfg.database} ssl=${Boolean(ssl)}`);
+function getPool() {
+  if (pool) return pool;
+  const cfg = resolveConfig();
+  const ssl = shouldUseSsl(cfg.host);
+  pool = new Pool({
+    ...toPgOptions(cfg),
+    max: process.env.VERCEL ? 1 : 10,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000,
+  });
+  console.log(`Postgres: host=${cfg.host} db=${cfg.database} ssl=${Boolean(ssl)}`);
+  return pool;
+}
 
-module.exports = pool;
+module.exports = new Proxy({}, {
+  get(_target, prop) {
+    const instance = getPool();
+    const value = instance[prop];
+    return typeof value === 'function' ? value.bind(instance) : value;
+  },
+});

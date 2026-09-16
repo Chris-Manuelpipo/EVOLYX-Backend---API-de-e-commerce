@@ -1,4 +1,4 @@
-require('dotenv').config({ quiet: true });
+require('../config/loadEnv');
 const fs = require('fs');
 const path = require('path');
 const db = require('../config/database');
