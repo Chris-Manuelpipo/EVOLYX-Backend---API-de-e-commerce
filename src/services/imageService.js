@@ -118,7 +118,7 @@ exports.deleteImage = async (imageId) => {
     
     // Supprimer de Cloudinary
     if (image.rows[0].public_id) {
-      const cloudinary = require('../config/cloudinary');
+      const { cloudinary } = require('../config/cloudinary');
       await cloudinary.uploader.destroy(image.rows[0].public_id);
     }
     
@@ -155,7 +155,7 @@ exports.deleteAllProductImages = async (product_id) => {
     );
     
     // Supprimer chaque image de Cloudinary
-    const cloudinary = require('../config/cloudinary');
+    const { cloudinary } = require('../config/cloudinary');
     for (const image of images.rows) {
       if (image.public_id) {
         await cloudinary.uploader.destroy(image.public_id);

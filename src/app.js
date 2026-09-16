@@ -19,7 +19,6 @@ app.use(helmet({
 }));
 
 app.use(cors(corsOptions));
-
 app.use(express.json());
 app.use(morgan(isProd ? 'combined' : 'dev'));
 
@@ -27,7 +26,6 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Diagnostic temporaire : quelles dépendances cassent sur Vercel
 app.get('/api/boot-check', (req, res) => {
   const checks = {};
   const probes = [
@@ -35,6 +33,7 @@ app.get('/api/boot-check', (req, res) => {
     ['categories', () => require('./routes/public/categories')],
     ['products', () => require('./routes/public/products')],
     ['orders', () => require('./routes/public/orders')],
+    ['routes', () => require('./routes')],
     ['admin-auth', () => require('./routes/admin/auth')],
     ['admin', () => require('./routes/admin')],
     ['pdfkit', () => require('pdfkit')],
@@ -61,7 +60,15 @@ app.use('/uploads', (req, res, next) => {
   next();
 }, express.static(path.join(__dirname, '../uploads')));
 
-app.use('/api', require('./routes'));
+let apiRouter;
+app.use('/api', (req, res, next) => {
+  try {
+    if (!apiRouter) apiRouter = require('./routes');
+    return apiRouter(req, res, next);
+  } catch (err) {
+    return next(err);
+  }
+});
 
 app.use(errorHandler);
 
