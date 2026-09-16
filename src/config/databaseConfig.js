@@ -90,7 +90,9 @@ function shouldUseSsl(host) {
 }
 
 function toPgOptions(cfg, { database } = {}) {
-  const ssl = shouldUseSsl(cfg.host) ? { rejectUnauthorized: false } : false;
+  const ssl = shouldUseSsl(cfg.host)
+    ? { rejectUnauthorized: process.env.DATABASE_SSL_STRICT === 'true' }
+    : false;
   const dbName = database || cfg.database;
 
   if (cfg.mode === 'url') {

@@ -36,13 +36,26 @@ function sameLine(orderItem, requested) {
 }
 
 exports.createReturn = async (orderId, data) => {
+  const token = String(data.invoice_token || data.token || '').trim();
+  if (!token) {
+    throw new HttpError('Jeton de suivi requis', 401);
+  }
+
   const orderResult = await db.query(`SELECT * FROM orders WHERE id = $1`, [orderId]);
   const order = orderResult.rows[0];
-  if (!order) {
+  if (!order || !order.invoice_token || order.invoice_token !== token) {
     throw new HttpError('Commande non trouvée', 404);
   }
   if (order.status !== 'delivered') {
     throw new HttpError('Retour possible uniquement après livraison', 409);
+  }
+
+  const existing = await db.query(
+    `SELECT id FROM "returns" WHERE order_id = $1 AND status IN ('requested', 'approved') LIMIT 1`,
+    [orderId]
+  );
+  if (existing.rows.length) {
+    throw new HttpError('Un retour est déjà en cours pour cette commande', 409);
   }
 
   const orderItems = await getOrderItems(orderId);

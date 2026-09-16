@@ -98,17 +98,31 @@ exports.lockAndApply = async (client, code, cartTotal) => {
     [normalized]
   );
   const promo = result.rows[0];
-  assertPromoUsable(promo, cartTotal, { incrementing: true });
-
-  await client.query(
-    `UPDATE promos SET uses_count = uses_count + 1 WHERE id = $1`,
-    [promo.id]
-  );
+  // Valide sans consommer : la conso se fait à la confirmation
+  assertPromoUsable(promo, cartTotal, { incrementing: false });
 
   return {
     promo,
     discount: computeDiscount(promo, cartTotal),
   };
+};
+
+exports.consumePromoCode = async (client, code) => {
+  const normalized = normalizeCode(code);
+  if (!normalized) return;
+
+  const result = await client.query(
+    `SELECT * FROM promos WHERE code = $1 FOR UPDATE`,
+    [normalized]
+  );
+  const promo = result.rows[0];
+  if (!promo) return;
+  assertPromoUsable(promo, Number(promo.min_amount) || 0, { incrementing: true });
+
+  await client.query(
+    `UPDATE promos SET uses_count = uses_count + 1 WHERE id = $1`,
+    [promo.id]
+  );
 };
 
 exports.listPromos = async () => {
@@ -146,7 +160,13 @@ exports.createPromo = async (data) => {
 };
 
 exports.updatePromo = async (id, data) => {
-  await exports.getPromo(id);
+  const existing = await exports.getPromo(id);
+
+  const nextType = data.type !== undefined ? normalizeType(data.type) : normalizeType(existing.type);
+  const nextValue = data.value !== undefined ? Number(data.value) : Number(existing.value);
+  if (nextType === 'percent' && (!Number.isFinite(nextValue) || nextValue <= 0 || nextValue > 100)) {
+    throw new HttpError('Pour un pourcentage, la valeur doit être entre 1 et 100', 400);
+  }
 
   const fields = [];
   const values = [];

@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../../config/database');
+const loginThrottle = require('../../middleware/loginThrottle');
 
 const INVALID_CREDENTIALS = 'Identifiants invalides';
 let dummyHash;
@@ -34,20 +35,23 @@ exports.login = async (req, res, next) => {
     }
 
     if (!admin || !match) {
+      loginThrottle.recordFailure(req);
       return res.status(401).json({
         success: false,
         message: INVALID_CREDENTIALS,
       });
     }
 
-    if (!process.env.JWT_SECRET) {
-      throw new Error('JWT_SECRET manquant');
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+      throw new Error('JWT_SECRET manquant ou trop court (min. 32 caractères)');
     }
+
+    loginThrottle.clear(req);
 
     const token = jwt.sign(
       { id: admin.id, role: admin.role },
       process.env.JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: '8h', algorithm: 'HS256' }
     );
 
     res.json({
@@ -70,4 +74,20 @@ exports.login = async (req, res, next) => {
 /** JWT stateless : no-op côté serveur, le client jette le token. */
 exports.logout = (req, res) => {
   res.json({ success: true, message: 'Déconnecté' });
+};
+
+exports.me = async (req, res, next) => {
+  try {
+    const result = await db.query(
+      `SELECT id, email, role FROM admins WHERE id = $1`,
+      [req.admin.id]
+    );
+    const admin = result.rows[0];
+    if (!admin) {
+      return res.status(401).json({ success: false, message: 'Session invalide' });
+    }
+    res.json({ success: true, data: admin });
+  } catch (err) {
+    next(err);
+  }
 };

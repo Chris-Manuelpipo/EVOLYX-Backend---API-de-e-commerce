@@ -13,6 +13,15 @@ const orderCreateLimit = rateLimit({
   message: 'Trop de commandes, réessayez plus tard',
 });
 
+function orderToken(req) {
+  return (
+    req.query.token ||
+    req.get('x-order-token') ||
+    (req.body && (req.body.invoice_token || req.body.token)) ||
+    ''
+  );
+}
+
 router.post('/', orderCreateLimit, validate(createOrderSchema), async (req, res, next) => {
   try {
     const result = await service.createOrderWithWhatsApp(req.body);
@@ -24,7 +33,7 @@ router.post('/', orderCreateLimit, validate(createOrderSchema), async (req, res,
 
 router.get('/:id/track', async (req, res, next) => {
   try {
-    const order = await service.getOrderStatus(req.params.id);
+    const order = await service.getOrderStatus(req.params.id, orderToken(req));
     res.json({ success: true, data: order });
   } catch (err) {
     next(err);
@@ -37,7 +46,10 @@ router.get('/:id/invoice', (req, res, next) => {
 
 router.post('/:id/returns', validate(createReturnSchema), async (req, res, next) => {
   try {
-    const data = await returnService.createReturn(req.params.id, req.body);
+    const data = await returnService.createReturn(req.params.id, {
+      ...req.body,
+      invoice_token: orderToken(req),
+    });
     res.status(201).json({ success: true, data });
   } catch (err) {
     next(err);
@@ -46,7 +58,7 @@ router.post('/:id/returns', validate(createReturnSchema), async (req, res, next)
 
 router.get('/:id', async (req, res, next) => {
   try {
-    const order = await service.getOrderStatus(req.params.id);
+    const order = await service.getOrderStatus(req.params.id, orderToken(req));
     res.json({ success: true, data: order });
   } catch (err) {
     next(err);

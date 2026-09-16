@@ -19,7 +19,7 @@ app.use(helmet({
 }));
 
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: '200kb' }));
 app.use(morgan(isProd ? 'combined' : 'dev'));
 
 app.get('/api/health', (req, res) => {
@@ -27,6 +27,13 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/boot-check', (req, res) => {
+  if (isProd) {
+    const expected = process.env.BOOT_CHECK_SECRET;
+    const provided = req.get('x-boot-secret') || req.query.secret;
+    if (!expected || provided !== expected) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
+  }
   const checks = {};
   const probes = [
     ['legal', () => require('./routes/public/legal')],
@@ -45,7 +52,7 @@ app.get('/api/boot-check', (req, res) => {
       load();
       checks[name] = 'ok';
     } catch (err) {
-      checks[name] = err && err.message ? err.message : String(err);
+      checks[name] = isProd ? 'error' : (err && err.message ? err.message : String(err));
     }
   }
   res.json({ ok: Object.values(checks).every((v) => v === 'ok'), checks });

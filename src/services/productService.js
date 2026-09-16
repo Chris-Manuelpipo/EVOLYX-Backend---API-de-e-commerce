@@ -16,6 +16,16 @@ const IMAGES_AGG = `
   ) as images
 `;
 
+function stripPrivateProductFields(row) {
+  if (!row) return row;
+  const { cost_price, ...rest } = row;
+  return rest;
+}
+
+function stripPrivateProductFieldsList(rows) {
+  return Array.isArray(rows) ? rows.map(stripPrivateProductFields) : rows;
+}
+
 async function activeClause(alias = 'p') {
   if (await hasColumn('products', 'is_active')) {
     return ` AND ${alias}.is_active = true`;
@@ -205,7 +215,9 @@ exports.getOneProduct = async (id, options = {}) => {
     [id]
   );
 
-  return result.rows[0];
+  const product = result.rows[0];
+  if (!product) return product;
+  return options.publicOnly ? stripPrivateProductFields(product) : product;
 };
 
 // UPDATE avec images
@@ -414,7 +426,9 @@ exports.listPublicProducts = async (filters = {}) => {
   );
 
   return {
-    products: result.rows,
+    products: filters.publicOnly !== false
+      ? stripPrivateProductFieldsList(result.rows)
+      : result.rows,
     ...paginationMeta(total, page, limit),
   };
 };
@@ -439,7 +453,7 @@ exports.getRelatedProducts = async (id, limit = 4) => {
   );
 
   if (result.rows.length >= limit) {
-    return result.rows;
+    return stripPrivateProductFieldsList(result.rows);
   }
 
   const excludeIds = [Number(id), ...result.rows.map((row) => Number(row.id))];
@@ -455,7 +469,7 @@ exports.getRelatedProducts = async (id, limit = 4) => {
     [excludeIds, limit - result.rows.length]
   );
 
-  return result.rows.concat(extra.rows);
+  return stripPrivateProductFieldsList(result.rows.concat(extra.rows));
 };
 
 // Pagination avec images
@@ -611,7 +625,7 @@ exports.getFeaturedProducts = async (limit = 5) => {
     [limit]
   );
 
-  return result.rows;
+  return stripPrivateProductFieldsList(result.rows);
 };
 
 exports.searchProducts = async (query, page = 1, limit = 12, options = {}) => {

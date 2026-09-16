@@ -189,6 +189,7 @@ exports.createOrder = async (data) => {
     const { customer_name, customer_phone, customer_address } = data;
     let items = Array.isArray(data.items) ? data.items : [];
     let cartId = null;
+    let itemsFromCart = false;
 
     if (data.cart_token) {
       try {
@@ -196,6 +197,7 @@ exports.createOrder = async (data) => {
         cartId = cart.cartId;
         if (!items.length) {
           items = cart.items;
+          itemsFromCart = true;
         }
       } catch (error) {
         if (!items.length) throw error;
@@ -221,6 +223,7 @@ exports.createOrder = async (data) => {
 
     const order = orderResult.rows[0];
     let total = 0;
+    const reservedItems = [];
 
     for (const item of items) {
       const productResult = await client.query(
@@ -263,7 +266,15 @@ exports.createOrder = async (data) => {
          VALUES($1,$2,$3,$4,$5)`,
         [order.id, item.product_id, item.variation_id || null, item.quantity, price]
       );
+      reservedItems.push({
+        product_id: item.product_id,
+        variation_id: item.variation_id || null,
+        quantity: item.quantity,
+      });
     }
+
+    // Réserve le stock dès la création (évite la survente en pending)
+    await applyStockDelta(client, reservedItems, -1);
 
     let discount = 0;
     let promoCode = null;
@@ -297,7 +308,8 @@ exports.createOrder = async (data) => {
       );
     }
 
-    if (cartId) {
+    // Ne vide le panier que si les articles viennent réellement de ce panier
+    if (cartId && itemsFromCart) {
       await client.query(`DELETE FROM cart_items WHERE cart_id = $1`, [cartId]);
     }
 
@@ -336,14 +348,14 @@ exports.createOrderWithWhatsApp = async (data) => {
   const encodedMessage = encodeURIComponent(message);
   const whatsappLink = `https://wa.me/${whatsappNumber()}?text=${encodedMessage}`;
 
-  const publicOrder = omitInvoiceToken(order);
-
+  // Le client a besoin de invoice_token pour le suivi ; on ne l’omet pas ici.
+  const clientOrder = { ...order };
   return {
     success: true,
-    order: publicOrder,
+    order: clientOrder,
     message,
     whatsappLink,
-    data: { order: publicOrder, whatsappLink, message },
+    data: { order: clientOrder, whatsappLink, message },
   };
 };
 
@@ -368,6 +380,10 @@ exports.generateWhatsAppMessage = (order) => {
   }
   message += `\n💰 *TOTAL: ${order.total_amount} FCFA*`;
   message += `\n⏰ *Date: ${new Date().toLocaleString()}*`;
+  if (order.invoice_token) {
+    const shop = (process.env.SHOP_URL || 'https://shop.evolyx.cm').replace(/\/$/, '');
+    message += `\n🔗 Suivi: ${shop}/order-tracking.html?id=${order.id}&token=${order.invoice_token}`;
+  }
 
   return message;
 };
@@ -410,22 +426,34 @@ exports.getOrderById = async (orderId) => {
   return exports.getOrderWithItems(orderId);
 };
 
-exports.getOrderStatus = async (orderId) => {
-  const cols = ['id', 'status', 'total_amount', 'created_at', 'customer_name', 'customer_address'];
-  if (await hasColumn('orders', 'promo_code')) {
-    cols.push('promo_code', 'promo_discount');
+exports.getOrderStatus = async (orderId, token) => {
+  const provided = String(token || '').trim();
+  if (!provided) {
+    throw new HttpError('Jeton de suivi requis', 401);
   }
 
-  const result = await db.query(
-    `SELECT ${cols.join(', ')} FROM orders WHERE id = $1`,
+  const selectCols = ['id', 'status', 'total_amount', 'created_at', 'customer_name', 'customer_address'];
+  if (await hasColumn('orders', 'invoice_token')) {
+    selectCols.push('invoice_token');
+  }
+  if (await hasColumn('orders', 'promo_code')) {
+    selectCols.push('promo_code', 'promo_discount');
+  }
+
+  const orderResult = await db.query(
+    `SELECT ${selectCols.join(', ')} FROM orders WHERE id = $1`,
     [orderId]
   );
 
-  if (result.rows.length === 0) {
+  if (orderResult.rows.length === 0) {
     throw new HttpError('Commande non trouvée', 404);
   }
 
-  const order = result.rows[0];
+  const order = orderResult.rows[0];
+  if (!order.invoice_token || order.invoice_token !== provided) {
+    throw new HttpError('Commande non trouvée', 404);
+  }
+
   order.items = (await getOrderItems(orderId)).map(toTrackItem);
   await attachTimeline(order);
   return omitInvoiceToken(order);
@@ -469,10 +497,17 @@ exports.updateOrderStatus = async (orderId, newStatus) => {
     const items = itemsRes.rows;
 
     if (current === 'pending' && newStatus === 'confirmed') {
-      await applyStockDelta(client, items, -1);
+      // Stock déjà réservé à la création ; on consomme le code promo maintenant
+      if (order.promo_code) {
+        await promoService.consumePromoCode(client, order.promo_code);
+      }
     }
 
-    if (newStatus === 'cancelled' && PAID_STATUSES.includes(current) && current !== 'shipped' && current !== 'delivered') {
+    if (
+      newStatus === 'cancelled' &&
+      (current === 'pending' ||
+        (PAID_STATUSES.includes(current) && current !== 'shipped' && current !== 'delivered'))
+    ) {
       await applyStockDelta(client, items, 1);
     }
 

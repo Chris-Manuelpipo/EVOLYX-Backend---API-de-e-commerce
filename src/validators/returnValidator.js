@@ -2,6 +2,8 @@ const Joi = require('joi');
 
 exports.createReturnSchema = Joi.object({
   reason: Joi.string().trim().min(3).max(2000).required(),
+  invoice_token: Joi.string().trim().min(8).max(128),
+  token: Joi.string().trim().min(8).max(128),
   items: Joi.array()
     .items(
       Joi.object({

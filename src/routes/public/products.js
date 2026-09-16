@@ -2,7 +2,14 @@ const router = require('express').Router();
 const service = require('../../services/productService');
 const reviewService = require('../../services/reviewService');
 const validate = require('../../middleware/validate');
+const rateLimit = require('../../middleware/rateLimit');
 const { createReviewSchema } = require('../../validators/reviewValidator');
+
+const reviewLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Trop d’avis envoyés, réessayez plus tard',
+});
 
 function paginationPayload(result) {
   return {
@@ -95,7 +102,7 @@ router.get('/:id/reviews', async (req, res, next) => {
   }
 });
 
-router.post('/:id/reviews', validate(createReviewSchema), async (req, res, next) => {
+router.post('/:id/reviews', reviewLimit, validate(createReviewSchema), async (req, res, next) => {
   try {
     const review = await reviewService.createReview(req.params.id, req.body);
     res.status(201).json({ success: true, data: review });

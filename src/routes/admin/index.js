@@ -4,9 +4,11 @@ const router = require('express').Router();
 router.use('/', require('./auth'));
 
 const protect = require('../../middleware/auth');
+const authController = require('../../controllers/admin/authController');
 
 // Toutes les routes après sont protégées
 router.use(protect);
+router.get('/me', authController.me);
 
 router.use('/products', require('./products'));
 router.use('/orders', require('./orders'));
