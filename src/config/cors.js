@@ -26,7 +26,7 @@ function getAllowedOrigins() {
 }
 
 function isOriginAllowed(origin) {
-  if (!origin) return true;
+  if (!origin || origin === 'null') return true;
   return getAllowedOrigins().includes(origin);
 }
 
